@@ -6,20 +6,25 @@ import {
   OnGatewayDisconnect,
   MessageBody,
   ConnectedSocket,
-} from "@nestjs/websockets";
-import { Server, Socket } from "socket.io";
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+
+interface KnockEntry {
+  displayName: string;
+  socket: Socket;
+}
 
 interface RoomInfo {
   peers: Map<string, string>; // socketId -> displayName
   isPrivate: boolean;
+  title: string;
   creatorSocketId: string;
-  // Pending knock requests for private rooms: socketId -> displayName
-  knockQueue: Map<string, string>;
+  knockQueue: Map<string, KnockEntry>;
 }
 
 @WebSocketGateway({
-  cors: { origin: "*", methods: ["GET", "POST"] },
-  namespace: "/video",
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  namespace: '/video',
 })
 export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -36,18 +41,16 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.rooms.forEach((room, roomId) => {
       if (room.peers.has(client.id)) {
         room.peers.delete(client.id);
-        client.to(roomId).emit("peer-left", { peerId: client.id });
+        client.to(roomId).emit('peer-left', { peerId: client.id });
         if (room.peers.size === 0) this.rooms.delete(roomId);
       }
-      // Also remove from knock queue
       if (room.knockQueue.has(client.id)) {
         room.knockQueue.delete(client.id);
-        // If the disconnected one was the creator, notify remaining waiters
         if (room.creatorSocketId === client.id) {
-          room.knockQueue.forEach((_, sid) => {
+          room.knockQueue.forEach((entry, sid) => {
             this.server
               .to(sid)
-              .emit("knock-rejected", { reason: "Creator left" });
+              .emit('knock-rejected', { reason: 'Creator left' });
           });
           room.knockQueue.clear();
         }
@@ -57,27 +60,33 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ─── Room Management ────────────────────────────────────────────────────────
 
-  @SubscribeMessage("create-room")
+  @SubscribeMessage('create-room')
   handleCreateRoom(
     @ConnectedSocket() client: Socket,
     @MessageBody()
-    data: { roomId: string; displayName: string; isPrivate?: boolean },
+    data: {
+      roomId: string;
+      displayName: string;
+      isPrivate?: boolean;
+      title?: string;
+    },
   ) {
-    const { roomId, displayName, isPrivate = false } = data;
+    const { roomId, displayName, isPrivate = false, title = '' } = data;
     this.rooms.set(roomId, {
       peers: new Map([[client.id, displayName]]),
       isPrivate,
+      title,
       creatorSocketId: client.id,
       knockQueue: new Map(),
     });
     client.join(roomId);
-    client.emit("room-created", { roomId, isPrivate });
+    client.emit('room-created', { roomId, isPrivate, title });
     console.log(
-      `[Video] created room ${roomId} (${isPrivate ? "private" : "open"}) by ${displayName}`,
+      `[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`,
     );
   }
 
-  @SubscribeMessage("join-room")
+  @SubscribeMessage('join-room')
   async handleJoinRoom(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; displayName: string },
@@ -86,25 +95,29 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = this.rooms.get(roomId);
 
     if (!room) {
-      client.emit("error", { message: "Room not found" });
+      client.emit('error', { message: 'Room not found' });
       return;
     }
 
     if (room.isPrivate) {
-      // Put guest in knock queue — don't add to room yet
-      room.knockQueue.set(client.id, displayName);
-      // Notify creator
-      this.server.to(room.creatorSocketId).emit("knock-request", {
+      room.knockQueue.set(client.id, { displayName, socket: client });
+      this.server.to(room.creatorSocketId).emit('knock-request', {
         peerId: client.id,
         displayName,
       });
-      // Tell guest they're waiting
-      client.emit("waiting-for-approval");
+      client.emit('waiting-for-approval');
+      // Send room info (title) to the waiting guest
+      client.emit('room-info', {
+        title: room.title,
+        isPrivate: room.isPrivate,
+      });
       return;
     }
 
     // Open room: join immediately
     this.admitPeer(client, roomId, displayName, room);
+    // Send room info to newly joined peer
+    client.emit('room-info', { title: room.title, isPrivate: room.isPrivate });
   }
 
   /** Internal: fully admit a peer into the room */
@@ -121,10 +134,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         displayName: name,
       }),
     );
-    client.emit("existing-peers", { peers: existingPeers });
+    client.emit('existing-peers', { peers: existingPeers });
 
     // Notify existing peers
-    client.to(roomId).emit("peer-joined", { peerId: client.id, displayName });
+    client.to(roomId).emit('peer-joined', { peerId: client.id, displayName });
 
     // Add to room
     room.peers.set(client.id, displayName);
@@ -133,7 +146,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ─── Approval Flow ──────────────────────────────────────────────────────────
 
-  @SubscribeMessage("approve-knock")
+  @SubscribeMessage('approve-knock')
   handleApproveKnock(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
@@ -142,22 +155,21 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = this.rooms.get(roomId);
     if (!room || room.creatorSocketId !== client.id) return;
 
-    const displayName = room.knockQueue.get(peerId);
-    if (!displayName) return;
+    const entry = room.knockQueue.get(peerId);
+    if (!entry) return;
 
     room.knockQueue.delete(peerId);
 
     // Notify the guest they're approved
-    this.server.to(peerId).emit("knock-approved", { roomId });
+    this.server
+      .to(peerId)
+      .emit('knock-approved', { roomId, title: room.title });
 
-    // Admit them: get their socket and join them
-    const guestSocket = this.server.sockets.sockets.get(peerId);
-    if (guestSocket) {
-      this.admitPeer(guestSocket, roomId, displayName, room);
-    }
+    // Admit them using the stored socket reference
+    this.admitPeer(entry.socket, roomId, entry.displayName, room);
   }
 
-  @SubscribeMessage("reject-knock")
+  @SubscribeMessage('reject-knock')
   handleRejectKnock(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
@@ -169,45 +181,43 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.knockQueue.delete(peerId);
     this.server
       .to(peerId)
-      .emit("knock-rejected", { reason: "Creator rad etdi" });
+      .emit('knock-rejected', { reason: 'Creator rad etdi' });
   }
 
   // ─── WebRTC Signaling ────────────────────────────────────────────────────────
 
-  @SubscribeMessage("offer")
+  @SubscribeMessage('offer')
   handleOffer(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
     this.server
       .to(data.targetId)
-      .emit("offer", { senderId: client.id, sdp: data.sdp });
+      .emit('offer', { senderId: client.id, sdp: data.sdp });
   }
 
-  @SubscribeMessage("answer")
+  @SubscribeMessage('answer')
   handleAnswer(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
     this.server
       .to(data.targetId)
-      .emit("answer", { senderId: client.id, sdp: data.sdp });
+      .emit('answer', { senderId: client.id, sdp: data.sdp });
   }
 
-  @SubscribeMessage("ice-candidate")
+  @SubscribeMessage('ice-candidate')
   handleIceCandidate(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { targetId: string; candidate: any },
   ) {
-    this.server
-      .to(data.targetId)
-      .emit("ice-candidate", {
-        senderId: client.id,
-        candidate: data.candidate,
-      });
+    this.server.to(data.targetId).emit('ice-candidate', {
+      senderId: client.id,
+      candidate: data.candidate,
+    });
   }
 
-  @SubscribeMessage("leave-room")
+  @SubscribeMessage('leave-room')
   handleLeaveRoom(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
@@ -219,7 +229,25 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       room.knockQueue.delete(client.id);
       if (room.peers.size === 0) this.rooms.delete(roomId);
     }
-    client.to(roomId).emit("peer-left", { peerId: client.id });
+    client.to(roomId).emit('peer-left', { peerId: client.id });
     client.leave(roomId);
+  }
+
+  // ─── Screen Share Relay ─────────────────────────────────────────────────────
+
+  @SubscribeMessage('screen-share-started')
+  handleScreenShareStarted(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
+  }
+
+  @SubscribeMessage('screen-share-stopped')
+  handleScreenShareStopped(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
   }
 }

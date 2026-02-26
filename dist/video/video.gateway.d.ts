@@ -1,5 +1,5 @@
-import { OnGatewayConnection, OnGatewayDisconnect } from "@nestjs/websockets";
-import { Server, Socket } from "socket.io";
+import { OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
 export declare class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     server: Server;
     private rooms;
@@ -9,6 +9,7 @@ export declare class VideoGateway implements OnGatewayConnection, OnGatewayDisco
         roomId: string;
         displayName: string;
         isPrivate?: boolean;
+        title?: string;
     }): void;
     handleJoinRoom(client: Socket, data: {
         roomId: string;
@@ -36,6 +37,12 @@ export declare class VideoGateway implements OnGatewayConnection, OnGatewayDisco
         candidate: any;
     }): void;
     handleLeaveRoom(client: Socket, data: {
+        roomId: string;
+    }): void;
+    handleScreenShareStarted(client: Socket, data: {
+        roomId: string;
+    }): void;
+    handleScreenShareStopped(client: Socket, data: {
         roomId: string;
     }): void;
 }

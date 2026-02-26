@@ -26,17 +26,17 @@ let VideoGateway = class VideoGateway {
         this.rooms.forEach((room, roomId) => {
             if (room.peers.has(client.id)) {
                 room.peers.delete(client.id);
-                client.to(roomId).emit("peer-left", { peerId: client.id });
+                client.to(roomId).emit('peer-left', { peerId: client.id });
                 if (room.peers.size === 0)
                     this.rooms.delete(roomId);
             }
             if (room.knockQueue.has(client.id)) {
                 room.knockQueue.delete(client.id);
                 if (room.creatorSocketId === client.id) {
-                    room.knockQueue.forEach((_, sid) => {
+                    room.knockQueue.forEach((entry, sid) => {
                         this.server
                             .to(sid)
-                            .emit("knock-rejected", { reason: "Creator left" });
+                            .emit('knock-rejected', { reason: 'Creator left' });
                     });
                     room.knockQueue.clear();
                 }
@@ -44,42 +44,48 @@ let VideoGateway = class VideoGateway {
         });
     }
     handleCreateRoom(client, data) {
-        const { roomId, displayName, isPrivate = false } = data;
+        const { roomId, displayName, isPrivate = false, title = '' } = data;
         this.rooms.set(roomId, {
             peers: new Map([[client.id, displayName]]),
             isPrivate,
+            title,
             creatorSocketId: client.id,
             knockQueue: new Map(),
         });
         client.join(roomId);
-        client.emit("room-created", { roomId, isPrivate });
-        console.log(`[Video] created room ${roomId} (${isPrivate ? "private" : "open"}) by ${displayName}`);
+        client.emit('room-created', { roomId, isPrivate, title });
+        console.log(`[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`);
     }
     async handleJoinRoom(client, data) {
         const { roomId, displayName } = data;
         const room = this.rooms.get(roomId);
         if (!room) {
-            client.emit("error", { message: "Room not found" });
+            client.emit('error', { message: 'Room not found' });
             return;
         }
         if (room.isPrivate) {
-            room.knockQueue.set(client.id, displayName);
-            this.server.to(room.creatorSocketId).emit("knock-request", {
+            room.knockQueue.set(client.id, { displayName, socket: client });
+            this.server.to(room.creatorSocketId).emit('knock-request', {
                 peerId: client.id,
                 displayName,
             });
-            client.emit("waiting-for-approval");
+            client.emit('waiting-for-approval');
+            client.emit('room-info', {
+                title: room.title,
+                isPrivate: room.isPrivate,
+            });
             return;
         }
         this.admitPeer(client, roomId, displayName, room);
+        client.emit('room-info', { title: room.title, isPrivate: room.isPrivate });
     }
     admitPeer(client, roomId, displayName, room) {
         const existingPeers = Array.from(room.peers.entries()).map(([id, name]) => ({
             peerId: id,
             displayName: name,
         }));
-        client.emit("existing-peers", { peers: existingPeers });
-        client.to(roomId).emit("peer-joined", { peerId: client.id, displayName });
+        client.emit('existing-peers', { peers: existingPeers });
+        client.to(roomId).emit('peer-joined', { peerId: client.id, displayName });
         room.peers.set(client.id, displayName);
         client.join(roomId);
     }
@@ -88,15 +94,14 @@ let VideoGateway = class VideoGateway {
         const room = this.rooms.get(roomId);
         if (!room || room.creatorSocketId !== client.id)
             return;
-        const displayName = room.knockQueue.get(peerId);
-        if (!displayName)
+        const entry = room.knockQueue.get(peerId);
+        if (!entry)
             return;
         room.knockQueue.delete(peerId);
-        this.server.to(peerId).emit("knock-approved", { roomId });
-        const guestSocket = this.server.sockets.sockets.get(peerId);
-        if (guestSocket) {
-            this.admitPeer(guestSocket, roomId, displayName, room);
-        }
+        this.server
+            .to(peerId)
+            .emit('knock-approved', { roomId, title: room.title });
+        this.admitPeer(entry.socket, roomId, entry.displayName, room);
     }
     handleRejectKnock(client, data) {
         const { roomId, peerId } = data;
@@ -106,22 +111,20 @@ let VideoGateway = class VideoGateway {
         room.knockQueue.delete(peerId);
         this.server
             .to(peerId)
-            .emit("knock-rejected", { reason: "Creator rad etdi" });
+            .emit('knock-rejected', { reason: 'Creator rad etdi' });
     }
     handleOffer(client, data) {
         this.server
             .to(data.targetId)
-            .emit("offer", { senderId: client.id, sdp: data.sdp });
+            .emit('offer', { senderId: client.id, sdp: data.sdp });
     }
     handleAnswer(client, data) {
         this.server
             .to(data.targetId)
-            .emit("answer", { senderId: client.id, sdp: data.sdp });
+            .emit('answer', { senderId: client.id, sdp: data.sdp });
     }
     handleIceCandidate(client, data) {
-        this.server
-            .to(data.targetId)
-            .emit("ice-candidate", {
+        this.server.to(data.targetId).emit('ice-candidate', {
             senderId: client.id,
             candidate: data.candidate,
         });
@@ -135,8 +138,14 @@ let VideoGateway = class VideoGateway {
             if (room.peers.size === 0)
                 this.rooms.delete(roomId);
         }
-        client.to(roomId).emit("peer-left", { peerId: client.id });
+        client.to(roomId).emit('peer-left', { peerId: client.id });
         client.leave(roomId);
+    }
+    handleScreenShareStarted(client, data) {
+        client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
+    }
+    handleScreenShareStopped(client, data) {
+        client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
     }
 };
 exports.VideoGateway = VideoGateway;
@@ -145,7 +154,7 @@ __decorate([
     __metadata("design:type", socket_io_1.Server)
 ], VideoGateway.prototype, "server", void 0);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("create-room"),
+    (0, websockets_1.SubscribeMessage)('create-room'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -153,7 +162,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleCreateRoom", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("join-room"),
+    (0, websockets_1.SubscribeMessage)('join-room'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -161,7 +170,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], VideoGateway.prototype, "handleJoinRoom", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("approve-knock"),
+    (0, websockets_1.SubscribeMessage)('approve-knock'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -169,7 +178,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleApproveKnock", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("reject-knock"),
+    (0, websockets_1.SubscribeMessage)('reject-knock'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -177,7 +186,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleRejectKnock", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("offer"),
+    (0, websockets_1.SubscribeMessage)('offer'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -185,7 +194,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleOffer", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("answer"),
+    (0, websockets_1.SubscribeMessage)('answer'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -193,7 +202,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleAnswer", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("ice-candidate"),
+    (0, websockets_1.SubscribeMessage)('ice-candidate'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
@@ -201,17 +210,33 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleIceCandidate", null);
 __decorate([
-    (0, websockets_1.SubscribeMessage)("leave-room"),
+    (0, websockets_1.SubscribeMessage)('leave-room'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleLeaveRoom", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('screen-share-started'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleScreenShareStarted", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('screen-share-stopped'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleScreenShareStopped", null);
 exports.VideoGateway = VideoGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
-        cors: { origin: "*", methods: ["GET", "POST"] },
-        namespace: "/video",
+        cors: { origin: '*', methods: ['GET', 'POST'] },
+        namespace: '/video',
     })
 ], VideoGateway);
 //# sourceMappingURL=video.gateway.js.map
