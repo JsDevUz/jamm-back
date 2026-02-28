@@ -23,6 +23,7 @@ const uuid_1 = require("uuid");
 const chats_gateway_1 = require("./chats.gateway");
 const r2_service_1 = require("../common/services/r2.service");
 const encryption_service_1 = require("../common/encryption/encryption.service");
+const premium_service_1 = require("../premium/premium.service");
 const encryption_strategies_1 = require("../common/encryption/encryption.strategies");
 let ChatsService = class ChatsService {
     chatModel;
@@ -31,13 +32,15 @@ let ChatsService = class ChatsService {
     chatsGateway;
     r2Service;
     encryptionService;
-    constructor(chatModel, messageModel, userModel, chatsGateway, r2Service, encryptionService) {
+    premiumService;
+    constructor(chatModel, messageModel, userModel, chatsGateway, r2Service, encryptionService, premiumService) {
         this.chatModel = chatModel;
         this.messageModel = messageModel;
         this.userModel = userModel;
         this.chatsGateway = chatsGateway;
         this.r2Service = r2Service;
         this.encryptionService = encryptionService;
+        this.premiumService = premiumService;
     }
     async onModuleInit() {
         await this.backfillJammIds();
@@ -168,6 +171,17 @@ let ChatsService = class ChatsService {
             new mongoose_2.Types.ObjectId(userId),
             ...dto.memberIds.map((id) => new mongoose_2.Types.ObjectId(id)),
         ];
+        if (dto.isGroup) {
+            const groupCount = await this.chatModel.countDocuments({
+                createdBy: new mongoose_2.Types.ObjectId(userId),
+                isGroup: true,
+            });
+            const premiumStatus = await this.premiumService.getPremiumStatus(userId);
+            const limit = premiumStatus === 'active' ? 10 : 2;
+            if (groupCount >= limit) {
+                throw new common_1.ForbiddenException(`Siz maksimal darajadagi guruhlar soniga yetdingiz (${limit}). Ko'proq guruh ochish uchun Premium obunani faollashtiring.`);
+            }
+        }
         if (!dto.isGroup && members.length === 2) {
             const existing = await this.chatModel
                 .findOne({
@@ -645,6 +659,7 @@ exports.ChatsService = ChatsService = __decorate([
         mongoose_2.Model,
         chats_gateway_1.ChatsGateway,
         r2_service_1.R2Service,
-        encryption_service_1.EncryptionService])
+        encryption_service_1.EncryptionService,
+        premium_service_1.PremiumService])
 ], ChatsService);
 //# sourceMappingURL=chats.service.js.map

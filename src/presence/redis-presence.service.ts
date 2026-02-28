@@ -53,6 +53,10 @@ export class RedisPresenceService implements OnModuleDestroy {
     await this.subscriber?.quit();
   }
 
+  getInternalClient(): Redis {
+    return this.client;
+  }
+
   // ─── Presence Keys ──────────────────────────────────────────────────────────
 
   /**

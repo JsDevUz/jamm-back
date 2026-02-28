@@ -19,6 +19,9 @@ let User = class User {
     phone;
     avatar;
     lastSeen;
+    premiumStatus;
+    premiumExpiresAt;
+    hasUsedPromo;
 };
 exports.User = User;
 __decorate([
@@ -49,6 +52,18 @@ __decorate([
     (0, mongoose_1.Prop)({ type: Date, default: null }),
     __metadata("design:type", Date)
 ], User.prototype, "lastSeen", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: String, enum: ['none', 'active', 'expired'], default: 'none' }),
+    __metadata("design:type", String)
+], User.prototype, "premiumStatus", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Date, default: null }),
+    __metadata("design:type", Date)
+], User.prototype, "premiumExpiresAt", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], User.prototype, "hasUsedPromo", void 0);
 exports.User = User = __decorate([
     (0, mongoose_1.Schema)({ timestamps: true })
 ], User);

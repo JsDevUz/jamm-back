@@ -48,6 +48,9 @@ let RedisPresenceService = RedisPresenceService_1 = class RedisPresenceService {
         await this.publisher?.quit();
         await this.subscriber?.quit();
     }
+    getInternalClient() {
+        return this.client;
+    }
     async setOnline(userId) {
         const presenceKey = `${PRESENCE_PREFIX}${userId}`;
         const deviceKey = `${DEVICE_PREFIX}${userId}`;

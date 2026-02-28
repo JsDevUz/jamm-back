@@ -16,6 +16,7 @@ const courses_module_1 = require("./courses/courses.module");
 const chats_module_1 = require("./chats/chats.module");
 const video_module_1 = require("./video/video.module");
 const presence_module_1 = require("./presence/presence.module");
+const premium_module_1 = require("./premium/premium.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -36,6 +37,7 @@ exports.AppModule = AppModule = __decorate([
             chats_module_1.ChatsModule,
             video_module_1.VideoModule,
             presence_module_1.PresenceModule,
+            premium_module_1.PremiumModule,
         ],
     })
 ], AppModule);

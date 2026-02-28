@@ -6,6 +6,7 @@ import { UserDocument } from '../users/schemas/user.schema';
 import { ChatsGateway } from './chats.gateway';
 import { R2Service } from '../common/services/r2.service';
 import { EncryptionService } from '../common/encryption/encryption.service';
+import { PremiumService } from '../premium/premium.service';
 export declare class ChatsService implements OnModuleInit {
     private chatModel;
     private messageModel;
@@ -13,7 +14,8 @@ export declare class ChatsService implements OnModuleInit {
     private chatsGateway;
     private r2Service;
     private encryptionService;
-    constructor(chatModel: Model<ChatDocument>, messageModel: Model<MessageDocument>, userModel: Model<UserDocument>, chatsGateway: ChatsGateway, r2Service: R2Service, encryptionService: EncryptionService);
+    private premiumService;
+    constructor(chatModel: Model<ChatDocument>, messageModel: Model<MessageDocument>, userModel: Model<UserDocument>, chatsGateway: ChatsGateway, r2Service: R2Service, encryptionService: EncryptionService, premiumService: PremiumService);
     onModuleInit(): Promise<void>;
     private backfillAdmins;
     private backfillPrivateUrls;

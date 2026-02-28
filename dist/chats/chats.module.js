@@ -20,6 +20,7 @@ const chats_gateway_1 = require("./chats.gateway");
 const presence_module_1 = require("../presence/presence.module");
 const r2_service_1 = require("../common/services/r2.service");
 const encryption_module_1 = require("../common/encryption/encryption.module");
+const premium_module_1 = require("../premium/premium.module");
 let ChatsModule = class ChatsModule {
 };
 exports.ChatsModule = ChatsModule;
@@ -41,6 +42,7 @@ exports.ChatsModule = ChatsModule = __decorate([
             }),
             (0, common_1.forwardRef)(() => presence_module_1.PresenceModule),
             encryption_module_1.EncryptionModule,
+            premium_module_1.PremiumModule,
         ],
         providers: [chats_service_1.ChatsService, chats_gateway_1.ChatsGateway, r2_service_1.R2Service],
         controllers: [chats_controller_1.ChatsController],

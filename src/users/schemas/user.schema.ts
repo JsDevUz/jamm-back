@@ -25,6 +25,15 @@ export class User {
 
   @Prop({ type: Date, default: null })
   lastSeen: Date;
+
+  @Prop({ type: String, enum: ['none', 'active', 'expired'], default: 'none' })
+  premiumStatus: string;
+
+  @Prop({ type: Date, default: null })
+  premiumExpiresAt: Date;
+
+  @Prop({ default: false })
+  hasUsedPromo: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -11,6 +11,7 @@ import { ChatsGateway } from './chats.gateway';
 import { PresenceModule } from '../presence/presence.module';
 import { R2Service } from '../common/services/r2.service';
 import { EncryptionModule } from '../common/encryption/encryption.module';
+import { PremiumModule } from '../premium/premium.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { EncryptionModule } from '../common/encryption/encryption.module';
     }),
     forwardRef(() => PresenceModule),
     EncryptionModule,
+    PremiumModule,
   ],
   providers: [ChatsService, ChatsGateway, R2Service],
   controllers: [ChatsController],

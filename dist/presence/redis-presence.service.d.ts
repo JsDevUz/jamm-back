@@ -1,5 +1,6 @@
 import { OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
 export interface PresenceStatusEvent {
     userId: string;
     status: 'online' | 'offline';
@@ -13,6 +14,7 @@ export declare class RedisPresenceService implements OnModuleDestroy {
     private subscriber;
     constructor(configService: ConfigService);
     onModuleDestroy(): Promise<void>;
+    getInternalClient(): Redis;
     setOnline(userId: string): Promise<number>;
     refreshTTL(userId: string): Promise<void>;
     removeDevice(userId: string): Promise<number>;

@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ChatsGateway } from './chats.gateway';
 import { R2Service } from '../common/services/r2.service';
 import { EncryptionService } from '../common/encryption/encryption.service';
+import { PremiumService } from '../premium/premium.service';
 import {
   EncryptionType,
   PlainStrategy,
@@ -34,6 +35,7 @@ export class ChatsService implements OnModuleInit {
     @Inject(forwardRef(() => ChatsGateway)) private chatsGateway: ChatsGateway,
     private r2Service: R2Service,
     private encryptionService: EncryptionService,
+    private premiumService: PremiumService,
   ) {}
 
   async onModuleInit() {
@@ -197,6 +199,22 @@ export class ChatsService implements OnModuleInit {
       new Types.ObjectId(userId),
       ...dto.memberIds.map((id) => new Types.ObjectId(id)),
     ];
+
+    if (dto.isGroup) {
+      const groupCount = await this.chatModel.countDocuments({
+        createdBy: new Types.ObjectId(userId),
+        isGroup: true,
+      });
+
+      const premiumStatus = await this.premiumService.getPremiumStatus(userId);
+      const limit = premiumStatus === 'active' ? 10 : 2;
+
+      if (groupCount >= limit) {
+        throw new ForbiddenException(
+          `Siz maksimal darajadagi guruhlar soniga yetdingiz (${limit}). Ko'proq guruh ochish uchun Premium obunani faollashtiring.`,
+        );
+      }
+    }
 
     if (!dto.isGroup && members.length === 2) {
       const existing = await this.chatModel
