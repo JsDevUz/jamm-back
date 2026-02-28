@@ -5,18 +5,22 @@ import { MessageDocument } from './schemas/message.schema';
 import { UserDocument } from '../users/schemas/user.schema';
 import { ChatsGateway } from './chats.gateway';
 import { R2Service } from '../common/services/r2.service';
+import { EncryptionService } from '../common/encryption/encryption.service';
 export declare class ChatsService implements OnModuleInit {
     private chatModel;
     private messageModel;
     private userModel;
     private chatsGateway;
     private r2Service;
-    constructor(chatModel: Model<ChatDocument>, messageModel: Model<MessageDocument>, userModel: Model<UserDocument>, chatsGateway: ChatsGateway, r2Service: R2Service);
+    private encryptionService;
+    constructor(chatModel: Model<ChatDocument>, messageModel: Model<MessageDocument>, userModel: Model<UserDocument>, chatsGateway: ChatsGateway, r2Service: R2Service, encryptionService: EncryptionService);
     onModuleInit(): Promise<void>;
     private backfillAdmins;
     private backfillPrivateUrls;
     private generateJammId;
     private backfillJammIds;
+    private getEncryptionStrategy;
+    private decryptMessage;
     getUserChats(userId: string): Promise<any[]>;
     createChat(userId: string, dto: {
         isGroup: boolean;

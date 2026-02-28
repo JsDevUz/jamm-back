@@ -10,6 +10,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { ChatsGateway } from './chats.gateway';
 import { PresenceModule } from '../presence/presence.module';
 import { R2Service } from '../common/services/r2.service';
+import { EncryptionModule } from '../common/encryption/encryption.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { R2Service } from '../common/services/r2.service';
       }),
     }),
     forwardRef(() => PresenceModule),
+    EncryptionModule,
   ],
   providers: [ChatsService, ChatsGateway, R2Service],
   controllers: [ChatsController],

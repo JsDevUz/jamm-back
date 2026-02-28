@@ -4,6 +4,12 @@ export declare class Reply {
     userName: string;
     userAvatar: string;
     text: string;
+    iv: string;
+    authTag: string;
+    encryptionType: string;
+    isEncrypted: boolean;
+    keyVersion: number;
+    searchableText: string;
     createdAt: Date;
 }
 export declare const ReplySchema: import("mongoose").Schema<Reply, import("mongoose").Model<Reply, any, any, any, (Document<unknown, any, Reply, any, import("mongoose").DefaultSchemaOptions> & Reply & {
@@ -61,6 +67,60 @@ export declare const ReplySchema: import("mongoose").Schema<Reply, import("mongo
     }, "id"> & {
         id: string;
     }> | undefined;
+    iv?: import("mongoose").SchemaDefinitionProperty<string, Reply, Document<unknown, {}, Reply, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    authTag?: import("mongoose").SchemaDefinitionProperty<string, Reply, Document<unknown, {}, Reply, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    encryptionType?: import("mongoose").SchemaDefinitionProperty<string, Reply, Document<unknown, {}, Reply, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    isEncrypted?: import("mongoose").SchemaDefinitionProperty<boolean, Reply, Document<unknown, {}, Reply, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    keyVersion?: import("mongoose").SchemaDefinitionProperty<number, Reply, Document<unknown, {}, Reply, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    searchableText?: import("mongoose").SchemaDefinitionProperty<string, Reply, Document<unknown, {}, Reply, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
     createdAt?: import("mongoose").SchemaDefinitionProperty<Date, Reply, Document<unknown, {}, Reply, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Reply & {
@@ -76,6 +136,12 @@ export declare class Comment {
     userName: string;
     userAvatar: string;
     text: string;
+    iv: string;
+    authTag: string;
+    encryptionType: string;
+    isEncrypted: boolean;
+    keyVersion: number;
+    searchableText: string;
     createdAt: Date;
     replies: Reply[];
 }
@@ -126,6 +192,60 @@ export declare const CommentSchema: import("mongoose").Schema<Comment, import("m
         id: string;
     }> | undefined;
     text?: import("mongoose").SchemaDefinitionProperty<string, Comment, Document<unknown, {}, Comment, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    iv?: import("mongoose").SchemaDefinitionProperty<string, Comment, Document<unknown, {}, Comment, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    authTag?: import("mongoose").SchemaDefinitionProperty<string, Comment, Document<unknown, {}, Comment, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    encryptionType?: import("mongoose").SchemaDefinitionProperty<string, Comment, Document<unknown, {}, Comment, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    isEncrypted?: import("mongoose").SchemaDefinitionProperty<boolean, Comment, Document<unknown, {}, Comment, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    keyVersion?: import("mongoose").SchemaDefinitionProperty<number, Comment, Document<unknown, {}, Comment, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    searchableText?: import("mongoose").SchemaDefinitionProperty<string, Comment, Document<unknown, {}, Comment, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Comment & {
         _id: Types.ObjectId;

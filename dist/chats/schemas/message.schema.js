@@ -16,6 +16,12 @@ let Message = class Message {
     chatId;
     senderId;
     content;
+    iv;
+    authTag;
+    encryptionType;
+    isEncrypted;
+    keyVersion;
+    searchableText;
     isEdited;
     isDeleted;
     readBy;
@@ -34,6 +40,30 @@ __decorate([
     (0, mongoose_1.Prop)({ required: true }),
     __metadata("design:type", String)
 ], Message.prototype, "content", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Message.prototype, "iv", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Message.prototype, "authTag", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 'none' }),
+    __metadata("design:type", String)
+], Message.prototype, "encryptionType", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], Message.prototype, "isEncrypted", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0 }),
+    __metadata("design:type", Number)
+], Message.prototype, "keyVersion", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Message.prototype, "searchableText", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: false }),
     __metadata("design:type", Boolean)

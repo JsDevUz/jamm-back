@@ -17,6 +17,12 @@ let Reply = class Reply {
     userName;
     userAvatar;
     text;
+    iv;
+    authTag;
+    encryptionType;
+    isEncrypted;
+    keyVersion;
+    searchableText;
     createdAt;
 };
 exports.Reply = Reply;
@@ -37,6 +43,30 @@ __decorate([
     __metadata("design:type", String)
 ], Reply.prototype, "text", void 0);
 __decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Reply.prototype, "iv", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Reply.prototype, "authTag", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 'server' }),
+    __metadata("design:type", String)
+], Reply.prototype, "encryptionType", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], Reply.prototype, "isEncrypted", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0 }),
+    __metadata("design:type", Number)
+], Reply.prototype, "keyVersion", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Reply.prototype, "searchableText", void 0);
+__decorate([
     (0, mongoose_1.Prop)({ default: () => new Date() }),
     __metadata("design:type", Date)
 ], Reply.prototype, "createdAt", void 0);
@@ -49,6 +79,12 @@ let Comment = class Comment {
     userName;
     userAvatar;
     text;
+    iv;
+    authTag;
+    encryptionType;
+    isEncrypted;
+    keyVersion;
+    searchableText;
     createdAt;
     replies;
 };
@@ -69,6 +105,30 @@ __decorate([
     (0, mongoose_1.Prop)({ required: true }),
     __metadata("design:type", String)
 ], Comment.prototype, "text", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Comment.prototype, "iv", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Comment.prototype, "authTag", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 'server' }),
+    __metadata("design:type", String)
+], Comment.prototype, "encryptionType", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], Comment.prototype, "isEncrypted", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0 }),
+    __metadata("design:type", Number)
+], Comment.prototype, "keyVersion", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Comment.prototype, "searchableText", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: () => new Date() }),
     __metadata("design:type", Date)

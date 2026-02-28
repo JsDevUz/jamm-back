@@ -6,12 +6,30 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Course, CourseDocument } from './schemas/course.schema';
+import { EncryptionService } from '../common/encryption/encryption.service';
 
 @Injectable()
 export class CoursesService {
   constructor(
     @InjectModel(Course.name) private courseModel: Model<CourseDocument>,
+    private encryptionService: EncryptionService,
   ) {}
+
+  private decryptText(item: any): any {
+    if (!item.isEncrypted) return item;
+    try {
+      const decrypted = this.encryptionService.decrypt({
+        encryptedContent: item.text,
+        iv: item.iv,
+        authTag: item.authTag,
+        keyVersion: item.keyVersion || 0,
+      });
+      return { ...item, text: decrypted };
+    } catch (error) {
+      console.error('Failed to decrypt course content:', error);
+      return { ...item, text: '[Decryption Error]' };
+    }
+  }
 
   /* ---- SANITIZATION LOGIC ---- */
 
@@ -34,6 +52,20 @@ export class CoursesService {
         };
       });
     }
+
+    // Decrypt comments and replies
+    course.lessons = course.lessons.map((lesson: any) => ({
+      ...lesson,
+      comments: (lesson.comments || []).map((comment: any) => {
+        const decryptedComment = this.decryptText(comment);
+        return {
+          ...decryptedComment,
+          replies: (decryptedComment.replies || []).map((reply: any) =>
+            this.decryptText(reply),
+          ),
+        };
+      }),
+    }));
 
     return course;
   }
@@ -213,17 +245,26 @@ export class CoursesService {
     );
     if (!lesson) throw new NotFoundException('Dars topilmadi');
 
+    const encrypted = this.encryptionService.encrypt(text);
+
     lesson.comments.push({
       userId: new Types.ObjectId(user._id),
       userName: user.nickname || user.username,
       userAvatar: (user.nickname || user.username)
         .substring(0, 2)
         .toUpperCase(),
-      text,
+      text: encrypted.encryptedContent,
+      iv: encrypted.iv,
+      authTag: encrypted.authTag,
+      encryptionType: 'server',
+      isEncrypted: true,
+      keyVersion: encrypted.keyVersion,
+      searchableText: this.encryptionService.getSearchableText(text),
       createdAt: new Date(),
       replies: [],
     } as any);
-    return course.save();
+    const updatedCourse = await course.save();
+    return this.sanitizeCourse(updatedCourse, user._id.toString());
   }
 
   async addReply(
@@ -243,15 +284,24 @@ export class CoursesService {
     );
     if (!comment) throw new NotFoundException('Izoh topilmadi');
 
+    const encrypted = this.encryptionService.encrypt(text);
+
     comment.replies.push({
       userId: new Types.ObjectId(user._id),
       userName: user.nickname || user.username,
       userAvatar: (user.nickname || user.username)
         .substring(0, 2)
         .toUpperCase(),
-      text,
+      text: encrypted.encryptedContent,
+      iv: encrypted.iv,
+      authTag: encrypted.authTag,
+      encryptionType: 'server',
+      isEncrypted: true,
+      keyVersion: encrypted.keyVersion,
+      searchableText: this.encryptionService.getSearchableText(text),
       createdAt: new Date(),
     } as any);
-    return course.save();
+    const updatedCourse = await course.save();
+    return this.sanitizeCourse(updatedCourse, user._id.toString());
   }
 }

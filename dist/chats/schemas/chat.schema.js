@@ -22,6 +22,7 @@ class JoinRequest {
 exports.JoinRequest = JoinRequest;
 let Chat = class Chat {
     isGroup;
+    isE2EEnabled;
     jammId;
     privateurl;
     name;
@@ -31,6 +32,10 @@ let Chat = class Chat {
     createdBy;
     admins;
     lastMessage;
+    lastMessageIv;
+    lastMessageAuthTag;
+    lastMessageEncryptionType;
+    lastMessageKeyVersion;
     lastMessageAt;
     videoCallRoomId;
     videoCallCreatorId;
@@ -41,6 +46,10 @@ __decorate([
     (0, mongoose_1.Prop)({ required: true, default: false }),
     __metadata("design:type", Boolean)
 ], Chat.prototype, "isGroup", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], Chat.prototype, "isE2EEnabled", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: Number, unique: true, sparse: true }),
     __metadata("design:type", Number)
@@ -85,6 +94,22 @@ __decorate([
     (0, mongoose_1.Prop)(),
     __metadata("design:type", String)
 ], Chat.prototype, "lastMessage", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Chat.prototype, "lastMessageIv", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Chat.prototype, "lastMessageAuthTag", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 'none' }),
+    __metadata("design:type", String)
+], Chat.prototype, "lastMessageEncryptionType", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0 }),
+    __metadata("design:type", Number)
+], Chat.prototype, "lastMessageKeyVersion", void 0);
 __decorate([
     (0, mongoose_1.Prop)(),
     __metadata("design:type", Date)

@@ -1,8 +1,11 @@
 import { Model } from 'mongoose';
 import { CourseDocument } from './schemas/course.schema';
+import { EncryptionService } from '../common/encryption/encryption.service';
 export declare class CoursesService {
     private courseModel;
-    constructor(courseModel: Model<CourseDocument>);
+    private encryptionService;
+    constructor(courseModel: Model<CourseDocument>, encryptionService: EncryptionService);
+    private decryptText;
     private sanitizeCourse;
     getAllCoursesForUser(userId: string): Promise<any[]>;
     getCourseForUser(id: string, userId: string): Promise<any>;

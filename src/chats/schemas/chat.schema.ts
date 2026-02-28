@@ -17,6 +17,9 @@ export class Chat {
   @Prop({ required: true, default: false })
   isGroup: boolean;
 
+  @Prop({ default: false })
+  isE2EEnabled: boolean;
+
   @Prop({ type: Number, unique: true, sparse: true })
   jammId?: number;
 
@@ -51,6 +54,18 @@ export class Chat {
 
   @Prop()
   lastMessage?: string;
+
+  @Prop()
+  lastMessageIv?: string;
+
+  @Prop()
+  lastMessageAuthTag?: string;
+
+  @Prop({ default: 'none' })
+  lastMessageEncryptionType?: string;
+
+  @Prop({ default: 0 })
+  lastMessageKeyVersion: number;
 
   @Prop()
   lastMessageAt?: Date;

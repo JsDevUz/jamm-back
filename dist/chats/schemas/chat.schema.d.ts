@@ -9,6 +9,7 @@ export declare class JoinRequest {
 }
 export declare class Chat {
     isGroup: boolean;
+    isE2EEnabled: boolean;
     jammId?: number;
     privateurl?: string;
     name?: string;
@@ -21,6 +22,10 @@ export declare class Chat {
         permissions: string[];
     }[];
     lastMessage?: string;
+    lastMessageIv?: string;
+    lastMessageAuthTag?: string;
+    lastMessageEncryptionType?: string;
+    lastMessageKeyVersion: number;
     lastMessageAt?: Date;
     videoCallRoomId?: string;
     videoCallCreatorId?: Types.ObjectId;
@@ -46,6 +51,15 @@ export declare const ChatSchema: import("mongoose").Schema<Chat, import("mongoos
     id: string;
 }, {
     isGroup?: import("mongoose").SchemaDefinitionProperty<boolean, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    isE2EEnabled?: import("mongoose").SchemaDefinitionProperty<boolean, Chat, Document<unknown, {}, Chat, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
         _id: Types.ObjectId;
@@ -130,6 +144,42 @@ export declare const ChatSchema: import("mongoose").Schema<Chat, import("mongoos
         id: string;
     }> | undefined;
     lastMessage?: import("mongoose").SchemaDefinitionProperty<string | undefined, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    lastMessageIv?: import("mongoose").SchemaDefinitionProperty<string | undefined, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    lastMessageAuthTag?: import("mongoose").SchemaDefinitionProperty<string | undefined, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    lastMessageEncryptionType?: import("mongoose").SchemaDefinitionProperty<string | undefined, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    lastMessageKeyVersion?: import("mongoose").SchemaDefinitionProperty<number, Chat, Document<unknown, {}, Chat, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
         _id: Types.ObjectId;

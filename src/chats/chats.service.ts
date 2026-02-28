@@ -16,6 +16,14 @@ import { User, UserDocument } from '../users/schemas/user.schema';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatsGateway } from './chats.gateway';
 import { R2Service } from '../common/services/r2.service';
+import { EncryptionService } from '../common/encryption/encryption.service';
+import {
+  EncryptionType,
+  PlainStrategy,
+  ServerEncryptionStrategy,
+  FutureE2EStrategy,
+  EncryptionStrategy,
+} from '../common/encryption/encryption.strategies';
 
 @Injectable()
 export class ChatsService implements OnModuleInit {
@@ -25,6 +33,7 @@ export class ChatsService implements OnModuleInit {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @Inject(forwardRef(() => ChatsGateway)) private chatsGateway: ChatsGateway,
     private r2Service: R2Service,
+    private encryptionService: EncryptionService,
   ) {}
 
   async onModuleInit() {
@@ -96,6 +105,34 @@ export class ChatsService implements OnModuleInit {
     }
   }
 
+  private getEncryptionStrategy(chat: Chat): EncryptionStrategy {
+    if (!chat.isGroup) {
+      if ((chat as any).isE2EEnabled) {
+        return new FutureE2EStrategy(this.encryptionService);
+      }
+      return new ServerEncryptionStrategy(this.encryptionService);
+    }
+    // Group and Course chats (assuming for now courseId logic is handled elsewhere or groups cover it)
+    return new ServerEncryptionStrategy(this.encryptionService);
+  }
+
+  private decryptMessage(message: any, strategy: EncryptionStrategy): any {
+    if (!message.isEncrypted) return message;
+
+    try {
+      const decrypted = strategy.decrypt({
+        encryptedContent: message.content,
+        iv: message.iv,
+        authTag: message.authTag,
+        keyVersion: message.keyVersion || 0,
+      });
+      return { ...message, content: decrypted };
+    } catch (error) {
+      console.error(`Failed to decrypt message ${message._id}:`, error);
+      return { ...message, content: '[Decryption Error]' };
+    }
+  }
+
   async getUserChats(userId: string): Promise<any[]> {
     const chats = await this.chatModel
       .find({ members: new Types.ObjectId(userId) })
@@ -112,8 +149,32 @@ export class ChatsService implements OnModuleInit {
           readBy: { $ne: new Types.ObjectId(userId) },
         });
 
+        // Decrypt lastMessage preview
+        let decryptedLastMessage = chat.lastMessage;
+        if (
+          (chat as any).lastMessageEncryptionType !== 'none' &&
+          chat.lastMessage
+        ) {
+          try {
+            const strategy = this.getEncryptionStrategy(chat as any);
+            decryptedLastMessage = strategy.decrypt({
+              encryptedContent: chat.lastMessage,
+              iv: (chat as any).lastMessageIv || '',
+              authTag: (chat as any).lastMessageAuthTag || '',
+              keyVersion: (chat as any).lastMessageKeyVersion || 0,
+            });
+          } catch (error) {
+            console.error(
+              `Failed to decrypt lastMessage for chat ${chat._id}:`,
+              error,
+            );
+            decryptedLastMessage = '[Decryption Error]';
+          }
+        }
+
         return {
           ...chat,
+          lastMessage: decryptedLastMessage,
           unreadCount,
         };
       }),
@@ -462,20 +523,20 @@ export class ChatsService implements OnModuleInit {
     chatId: string,
     userId: string,
   ): Promise<MessageDocument[]> {
-    await this.getChat(chatId, userId);
+    const chat = await this.getChat(chatId, userId);
+    const strategy = this.getEncryptionStrategy(chat);
 
-    return this.messageModel
-      .find({ chatId: new Types.ObjectId(chatId), isDeleted: { $ne: true } })
+    const messages = await this.messageModel
+      .find({ chatId: new Types.ObjectId(chatId) })
       .populate('senderId', 'username nickname avatar')
       .populate({
         path: 'replayTo',
-        populate: {
-          path: 'senderId',
-          select: 'username nickname avatar',
-        },
+        populate: { path: 'senderId', select: 'username nickname avatar' },
       })
       .sort({ createdAt: 1 })
       .exec();
+
+    return messages.map((m) => this.decryptMessage(m.toObject(), strategy));
   }
 
   async sendMessage(
@@ -484,13 +545,20 @@ export class ChatsService implements OnModuleInit {
     content: string,
     replayToId?: string,
   ): Promise<MessageDocument> {
-    // Get chat to ensure user access. We store it for member IDs.
     const chat = await this.getChat(chatId, userId);
+    const strategy = this.getEncryptionStrategy(chat);
+    const encrypted = strategy.encrypt(content);
 
     const messageData: any = {
       chatId: new Types.ObjectId(chatId),
       senderId: new Types.ObjectId(userId),
-      content,
+      content: encrypted.encryptedContent,
+      iv: encrypted.iv,
+      authTag: encrypted.authTag,
+      encryptionType: strategy.getType(),
+      isEncrypted: strategy.getType() !== EncryptionType.NONE,
+      keyVersion: encrypted.keyVersion,
+      searchableText: this.encryptionService.getSearchableText(content),
     };
 
     if (replayToId) {
@@ -500,7 +568,11 @@ export class ChatsService implements OnModuleInit {
     const message = await this.messageModel.create(messageData);
 
     await this.chatModel.findByIdAndUpdate(chatId, {
-      lastMessage: content,
+      lastMessage: encrypted.encryptedContent,
+      lastMessageIv: encrypted.iv,
+      lastMessageAuthTag: encrypted.authTag,
+      lastMessageEncryptionType: strategy.getType(),
+      lastMessageKeyVersion: encrypted.keyVersion,
       lastMessageAt: new Date(),
     });
 
@@ -512,6 +584,11 @@ export class ChatsService implements OnModuleInit {
       },
     ]);
 
+    const decryptedMessage = this.decryptMessage(
+      populatedMessage.toObject(),
+      strategy,
+    );
+
     const rooms = [`chat_${chatId}`];
     if (chat && chat.members) {
       chat.members.forEach((m: any) =>
@@ -519,9 +596,9 @@ export class ChatsService implements OnModuleInit {
       );
     }
 
-    this.chatsGateway.server.to(rooms).emit('message_new', populatedMessage);
+    this.chatsGateway.server.to(rooms).emit('message_new', decryptedMessage);
 
-    return populatedMessage;
+    return decryptedMessage;
   }
 
   async editMessage(
@@ -542,7 +619,18 @@ export class ChatsService implements OnModuleInit {
       throw new ForbiddenException("O'chirilgan xabarni tahrirlab bo'lmaydi");
     }
 
-    message.content = newContent;
+    const chat = await this.getChat(message.chatId.toString(), userId);
+    const strategy = this.getEncryptionStrategy(chat);
+    const encrypted = strategy.encrypt(newContent);
+
+    message.content = encrypted.encryptedContent;
+    message.iv = encrypted.iv;
+    message.authTag = encrypted.authTag;
+    message.encryptionType = strategy.getType();
+    message.isEncrypted = strategy.getType() !== EncryptionType.NONE;
+    message.keyVersion = encrypted.keyVersion;
+    message.searchableText =
+      this.encryptionService.getSearchableText(newContent);
     message.isEdited = true;
     await message.save();
 
@@ -554,7 +642,11 @@ export class ChatsService implements OnModuleInit {
       },
     ]);
 
-    const chat = await this.chatModel.findById(message.chatId);
+    const decryptedMessage = this.decryptMessage(
+      populatedMessage.toObject(),
+      strategy,
+    );
+
     const rooms = [`chat_${message.chatId}`];
     if (chat && chat.members) {
       chat.members.forEach((m: any) =>
@@ -564,9 +656,9 @@ export class ChatsService implements OnModuleInit {
 
     this.chatsGateway.server
       .to(rooms)
-      .emit('message_updated', populatedMessage);
+      .emit('message_updated', decryptedMessage);
 
-    return populatedMessage;
+    return decryptedMessage;
   }
 
   async deleteMessage(

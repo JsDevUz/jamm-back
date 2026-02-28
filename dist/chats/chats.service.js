@@ -22,18 +22,22 @@ const user_schema_1 = require("../users/schemas/user.schema");
 const uuid_1 = require("uuid");
 const chats_gateway_1 = require("./chats.gateway");
 const r2_service_1 = require("../common/services/r2.service");
+const encryption_service_1 = require("../common/encryption/encryption.service");
+const encryption_strategies_1 = require("../common/encryption/encryption.strategies");
 let ChatsService = class ChatsService {
     chatModel;
     messageModel;
     userModel;
     chatsGateway;
     r2Service;
-    constructor(chatModel, messageModel, userModel, chatsGateway, r2Service) {
+    encryptionService;
+    constructor(chatModel, messageModel, userModel, chatsGateway, r2Service, encryptionService) {
         this.chatModel = chatModel;
         this.messageModel = messageModel;
         this.userModel = userModel;
         this.chatsGateway = chatsGateway;
         this.r2Service = r2Service;
+        this.encryptionService = encryptionService;
     }
     async onModuleInit() {
         await this.backfillJammIds();
@@ -95,6 +99,32 @@ let ChatsService = class ChatsService {
             console.log('Finished backfilling jammIds.');
         }
     }
+    getEncryptionStrategy(chat) {
+        if (!chat.isGroup) {
+            if (chat.isE2EEnabled) {
+                return new encryption_strategies_1.FutureE2EStrategy(this.encryptionService);
+            }
+            return new encryption_strategies_1.ServerEncryptionStrategy(this.encryptionService);
+        }
+        return new encryption_strategies_1.ServerEncryptionStrategy(this.encryptionService);
+    }
+    decryptMessage(message, strategy) {
+        if (!message.isEncrypted)
+            return message;
+        try {
+            const decrypted = strategy.decrypt({
+                encryptedContent: message.content,
+                iv: message.iv,
+                authTag: message.authTag,
+                keyVersion: message.keyVersion || 0,
+            });
+            return { ...message, content: decrypted };
+        }
+        catch (error) {
+            console.error(`Failed to decrypt message ${message._id}:`, error);
+            return { ...message, content: '[Decryption Error]' };
+        }
+    }
     async getUserChats(userId) {
         const chats = await this.chatModel
             .find({ members: new mongoose_2.Types.ObjectId(userId) })
@@ -108,8 +138,26 @@ let ChatsService = class ChatsService {
                 senderId: { $ne: new mongoose_2.Types.ObjectId(userId) },
                 readBy: { $ne: new mongoose_2.Types.ObjectId(userId) },
             });
+            let decryptedLastMessage = chat.lastMessage;
+            if (chat.lastMessageEncryptionType !== 'none' &&
+                chat.lastMessage) {
+                try {
+                    const strategy = this.getEncryptionStrategy(chat);
+                    decryptedLastMessage = strategy.decrypt({
+                        encryptedContent: chat.lastMessage,
+                        iv: chat.lastMessageIv || '',
+                        authTag: chat.lastMessageAuthTag || '',
+                        keyVersion: chat.lastMessageKeyVersion || 0,
+                    });
+                }
+                catch (error) {
+                    console.error(`Failed to decrypt lastMessage for chat ${chat._id}:`, error);
+                    decryptedLastMessage = '[Decryption Error]';
+                }
+            }
             return {
                 ...chat,
+                lastMessage: decryptedLastMessage,
                 unreadCount,
             };
         }));
@@ -343,33 +391,44 @@ let ChatsService = class ChatsService {
         return this.getChat(chat._id.toString(), userId);
     }
     async getChatMessages(chatId, userId) {
-        await this.getChat(chatId, userId);
-        return this.messageModel
-            .find({ chatId: new mongoose_2.Types.ObjectId(chatId), isDeleted: { $ne: true } })
+        const chat = await this.getChat(chatId, userId);
+        const strategy = this.getEncryptionStrategy(chat);
+        const messages = await this.messageModel
+            .find({ chatId: new mongoose_2.Types.ObjectId(chatId) })
             .populate('senderId', 'username nickname avatar')
             .populate({
             path: 'replayTo',
-            populate: {
-                path: 'senderId',
-                select: 'username nickname avatar',
-            },
+            populate: { path: 'senderId', select: 'username nickname avatar' },
         })
             .sort({ createdAt: 1 })
             .exec();
+        return messages.map((m) => this.decryptMessage(m.toObject(), strategy));
     }
     async sendMessage(chatId, userId, content, replayToId) {
         const chat = await this.getChat(chatId, userId);
+        const strategy = this.getEncryptionStrategy(chat);
+        const encrypted = strategy.encrypt(content);
         const messageData = {
             chatId: new mongoose_2.Types.ObjectId(chatId),
             senderId: new mongoose_2.Types.ObjectId(userId),
-            content,
+            content: encrypted.encryptedContent,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag,
+            encryptionType: strategy.getType(),
+            isEncrypted: strategy.getType() !== encryption_strategies_1.EncryptionType.NONE,
+            keyVersion: encrypted.keyVersion,
+            searchableText: this.encryptionService.getSearchableText(content),
         };
         if (replayToId) {
             messageData.replayTo = new mongoose_2.Types.ObjectId(replayToId);
         }
         const message = await this.messageModel.create(messageData);
         await this.chatModel.findByIdAndUpdate(chatId, {
-            lastMessage: content,
+            lastMessage: encrypted.encryptedContent,
+            lastMessageIv: encrypted.iv,
+            lastMessageAuthTag: encrypted.authTag,
+            lastMessageEncryptionType: strategy.getType(),
+            lastMessageKeyVersion: encrypted.keyVersion,
             lastMessageAt: new Date(),
         });
         const populatedMessage = await message.populate([
@@ -379,12 +438,13 @@ let ChatsService = class ChatsService {
                 populate: { path: 'senderId', select: 'username nickname avatar' },
             },
         ]);
+        const decryptedMessage = this.decryptMessage(populatedMessage.toObject(), strategy);
         const rooms = [`chat_${chatId}`];
         if (chat && chat.members) {
             chat.members.forEach((m) => rooms.push(`user_${m._id ? m._id.toString() : m.toString()}`));
         }
-        this.chatsGateway.server.to(rooms).emit('message_new', populatedMessage);
-        return populatedMessage;
+        this.chatsGateway.server.to(rooms).emit('message_new', decryptedMessage);
+        return decryptedMessage;
     }
     async editMessage(messageId, userId, newContent) {
         const message = await this.messageModel.findById(messageId);
@@ -396,7 +456,17 @@ let ChatsService = class ChatsService {
         if (message.isDeleted) {
             throw new common_1.ForbiddenException("O'chirilgan xabarni tahrirlab bo'lmaydi");
         }
-        message.content = newContent;
+        const chat = await this.getChat(message.chatId.toString(), userId);
+        const strategy = this.getEncryptionStrategy(chat);
+        const encrypted = strategy.encrypt(newContent);
+        message.content = encrypted.encryptedContent;
+        message.iv = encrypted.iv;
+        message.authTag = encrypted.authTag;
+        message.encryptionType = strategy.getType();
+        message.isEncrypted = strategy.getType() !== encryption_strategies_1.EncryptionType.NONE;
+        message.keyVersion = encrypted.keyVersion;
+        message.searchableText =
+            this.encryptionService.getSearchableText(newContent);
         message.isEdited = true;
         await message.save();
         const populatedMessage = await message.populate([
@@ -406,15 +476,15 @@ let ChatsService = class ChatsService {
                 populate: { path: 'senderId', select: 'username nickname avatar' },
             },
         ]);
-        const chat = await this.chatModel.findById(message.chatId);
+        const decryptedMessage = this.decryptMessage(populatedMessage.toObject(), strategy);
         const rooms = [`chat_${message.chatId}`];
         if (chat && chat.members) {
             chat.members.forEach((m) => rooms.push(`user_${m._id ? m._id.toString() : m.toString()}`));
         }
         this.chatsGateway.server
             .to(rooms)
-            .emit('message_updated', populatedMessage);
-        return populatedMessage;
+            .emit('message_updated', decryptedMessage);
+        return decryptedMessage;
     }
     async deleteMessage(messageId, userId) {
         const message = await this.messageModel.findById(messageId);
@@ -574,6 +644,7 @@ exports.ChatsService = ChatsService = __decorate([
         mongoose_2.Model,
         mongoose_2.Model,
         chats_gateway_1.ChatsGateway,
-        r2_service_1.R2Service])
+        r2_service_1.R2Service,
+        encryption_service_1.EncryptionService])
 ], ChatsService);
 //# sourceMappingURL=chats.service.js.map

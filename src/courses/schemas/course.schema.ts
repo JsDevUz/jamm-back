@@ -17,6 +17,24 @@ export class Reply {
   @Prop({ required: true })
   text: string;
 
+  @Prop({ default: '' })
+  iv: string;
+
+  @Prop({ default: '' })
+  authTag: string;
+
+  @Prop({ default: 'server' })
+  encryptionType: string;
+
+  @Prop({ default: false })
+  isEncrypted: boolean;
+
+  @Prop({ default: 0 })
+  keyVersion: number;
+
+  @Prop({ default: '' })
+  searchableText: string;
+
   @Prop({ default: () => new Date() })
   createdAt: Date;
 }
@@ -35,6 +53,24 @@ export class Comment {
 
   @Prop({ required: true })
   text: string;
+
+  @Prop({ default: '' })
+  iv: string;
+
+  @Prop({ default: '' })
+  authTag: string;
+
+  @Prop({ default: 'server' })
+  encryptionType: string;
+
+  @Prop({ default: false })
+  isEncrypted: boolean;
+
+  @Prop({ default: 0 })
+  keyVersion: number;
+
+  @Prop({ default: '' })
+  searchableText: string;
 
   @Prop({ default: () => new Date() })
   createdAt: Date;

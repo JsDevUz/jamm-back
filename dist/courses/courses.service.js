@@ -17,10 +17,30 @@ const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
 const mongoose_2 = require("mongoose");
 const course_schema_1 = require("./schemas/course.schema");
+const encryption_service_1 = require("../common/encryption/encryption.service");
 let CoursesService = class CoursesService {
     courseModel;
-    constructor(courseModel) {
+    encryptionService;
+    constructor(courseModel, encryptionService) {
         this.courseModel = courseModel;
+        this.encryptionService = encryptionService;
+    }
+    decryptText(item) {
+        if (!item.isEncrypted)
+            return item;
+        try {
+            const decrypted = this.encryptionService.decrypt({
+                encryptedContent: item.text,
+                iv: item.iv,
+                authTag: item.authTag,
+                keyVersion: item.keyVersion || 0,
+            });
+            return { ...item, text: decrypted };
+        }
+        catch (error) {
+            console.error('Failed to decrypt course content:', error);
+            return { ...item, text: '[Decryption Error]' };
+        }
     }
     sanitizeCourse(courseDoc, userId) {
         const course = courseDoc.toObject();
@@ -37,6 +57,16 @@ let CoursesService = class CoursesService {
                 };
             });
         }
+        course.lessons = course.lessons.map((lesson) => ({
+            ...lesson,
+            comments: (lesson.comments || []).map((comment) => {
+                const decryptedComment = this.decryptText(comment);
+                return {
+                    ...decryptedComment,
+                    replies: (decryptedComment.replies || []).map((reply) => this.decryptText(reply)),
+                };
+            }),
+        }));
         return course;
     }
     async getAllCoursesForUser(userId) {
@@ -149,17 +179,25 @@ let CoursesService = class CoursesService {
         const lesson = course.lessons.find((l) => l._id.toString() === lessonId);
         if (!lesson)
             throw new common_1.NotFoundException('Dars topilmadi');
+        const encrypted = this.encryptionService.encrypt(text);
         lesson.comments.push({
             userId: new mongoose_2.Types.ObjectId(user._id),
             userName: user.nickname || user.username,
             userAvatar: (user.nickname || user.username)
                 .substring(0, 2)
                 .toUpperCase(),
-            text,
+            text: encrypted.encryptedContent,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag,
+            encryptionType: 'server',
+            isEncrypted: true,
+            keyVersion: encrypted.keyVersion,
+            searchableText: this.encryptionService.getSearchableText(text),
             createdAt: new Date(),
             replies: [],
         });
-        return course.save();
+        const updatedCourse = await course.save();
+        return this.sanitizeCourse(updatedCourse, user._id.toString());
     }
     async addReply(courseId, lessonId, commentId, user, text) {
         const course = await this.findById(courseId);
@@ -169,22 +207,31 @@ let CoursesService = class CoursesService {
         const comment = lesson.comments.find((c) => c._id.toString() === commentId);
         if (!comment)
             throw new common_1.NotFoundException('Izoh topilmadi');
+        const encrypted = this.encryptionService.encrypt(text);
         comment.replies.push({
             userId: new mongoose_2.Types.ObjectId(user._id),
             userName: user.nickname || user.username,
             userAvatar: (user.nickname || user.username)
                 .substring(0, 2)
                 .toUpperCase(),
-            text,
+            text: encrypted.encryptedContent,
+            iv: encrypted.iv,
+            authTag: encrypted.authTag,
+            encryptionType: 'server',
+            isEncrypted: true,
+            keyVersion: encrypted.keyVersion,
+            searchableText: this.encryptionService.getSearchableText(text),
             createdAt: new Date(),
         });
-        return course.save();
+        const updatedCourse = await course.save();
+        return this.sanitizeCourse(updatedCourse, user._id.toString());
     }
 };
 exports.CoursesService = CoursesService;
 exports.CoursesService = CoursesService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, mongoose_1.InjectModel)(course_schema_1.Course.name)),
-    __metadata("design:paramtypes", [mongoose_2.Model])
+    __metadata("design:paramtypes", [mongoose_2.Model,
+        encryption_service_1.EncryptionService])
 ], CoursesService);
 //# sourceMappingURL=courses.service.js.map
