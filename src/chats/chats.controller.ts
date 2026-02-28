@@ -10,7 +10,10 @@ import {
   UseGuards,
   Request,
   Optional,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ChatsService } from './chats.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -38,6 +41,18 @@ export class ChatsController {
     },
   ) {
     return this.chatsService.createChat(req.user._id.toString(), dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('preview/:privateurl')
+  previewGroup(@Param('privateurl') privateurl: string) {
+    return this.chatsService.previewGroup(privateurl);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('resolve/:slug')
+  resolveSlug(@Request() req, @Param('slug') slug: string) {
+    return this.chatsService.resolveSlug(slug, req.user._id.toString());
   }
 
   @UseGuards(JwtAuthGuard)
@@ -85,6 +100,50 @@ export class ChatsController {
   @Delete('messages/:messageId')
   deleteMessage(@Request() req, @Param('messageId') messageId: string) {
     return this.chatsService.deleteMessage(messageId, req.user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/join-link')
+  joinGroupByLink(@Request() req, @Param('id') id: string) {
+    return this.chatsService.joinGroupByLink(id, req.user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id')
+  editChat(
+    @Request() req,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      name?: string;
+      description?: string;
+      avatar?: string;
+      members?: string[];
+      admins?: { userId: string; permissions: string[] }[];
+    },
+  ) {
+    return this.chatsService.editChat(id, req.user._id.toString(), body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('upload-avatar')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadGroupAvatarOnly(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.chatsService.uploadGroupAvatarOnly(file);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/avatar')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadAvatar(
+    @Request() req,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.chatsService.updateAvatar(id, req.user._id.toString(), file);
   }
 
   // ─── Video Call Endpoints ──────────────────────────────────────────────────

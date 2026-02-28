@@ -100,7 +100,7 @@ let VideoGateway = class VideoGateway {
         room.knockQueue.delete(peerId);
         this.server
             .to(peerId)
-            .emit('knock-approved', { roomId, title: room.title });
+            .emit('knock-approved', { roomId, title: room.title, mediaLocked: true });
         this.admitPeer(entry.socket, roomId, entry.displayName, room);
     }
     handleRejectKnock(client, data) {
@@ -146,6 +146,53 @@ let VideoGateway = class VideoGateway {
     }
     handleScreenShareStopped(client, data) {
         client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
+    }
+    handleRecordingStarted(client, data) {
+        client.to(data.roomId).emit('recording-started', { peerId: client.id });
+    }
+    handleRecordingStopped(client, data) {
+        client.to(data.roomId).emit('recording-stopped', { peerId: client.id });
+    }
+    handleForceMuteMic(client, data) {
+        const room = this.rooms.get(data.roomId);
+        if (!room || room.creatorSocketId !== client.id)
+            return;
+        this.server.to(data.peerId).emit('force-mute-mic');
+    }
+    handleForceMuteCam(client, data) {
+        const room = this.rooms.get(data.roomId);
+        if (!room || room.creatorSocketId !== client.id)
+            return;
+        this.server.to(data.peerId).emit('force-mute-cam');
+    }
+    handleAllowMic(client, data) {
+        const room = this.rooms.get(data.roomId);
+        if (!room || room.creatorSocketId !== client.id)
+            return;
+        this.server.to(data.peerId).emit('allow-mic');
+    }
+    handleAllowCam(client, data) {
+        const room = this.rooms.get(data.roomId);
+        if (!room || room.creatorSocketId !== client.id)
+            return;
+        this.server.to(data.peerId).emit('allow-cam');
+    }
+    handleHandRaised(client, data) {
+        client.to(data.roomId).emit('hand-raised', { peerId: client.id });
+    }
+    handleHandLowered(client, data) {
+        client.to(data.roomId).emit('hand-lowered', { peerId: client.id });
+    }
+    handleKickPeer(client, data) {
+        const room = this.rooms.get(data.roomId);
+        if (!room || room.creatorSocketId !== client.id)
+            return;
+        this.server.to(data.peerId).emit('kicked');
+        client.to(data.roomId).emit('peer-left', { peerId: data.peerId });
+        room.peers.delete(data.peerId);
+        const kickedSocket = this.server.sockets.sockets.get(data.peerId);
+        if (kickedSocket)
+            kickedSocket.leave(data.roomId);
     }
 };
 exports.VideoGateway = VideoGateway;
@@ -233,6 +280,78 @@ __decorate([
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", void 0)
 ], VideoGateway.prototype, "handleScreenShareStopped", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('recording-started'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleRecordingStarted", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('recording-stopped'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleRecordingStopped", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('force-mute-mic'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleForceMuteMic", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('force-mute-cam'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleForceMuteCam", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('allow-mic'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleAllowMic", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('allow-cam'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleAllowCam", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('hand-raised'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleHandRaised", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('hand-lowered'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleHandLowered", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('kick-peer'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], VideoGateway.prototype, "handleKickPeer", null);
 exports.VideoGateway = VideoGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
         cors: { origin: '*', methods: ['GET', 'POST'] },

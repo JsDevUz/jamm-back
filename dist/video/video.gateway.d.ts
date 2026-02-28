@@ -45,4 +45,36 @@ export declare class VideoGateway implements OnGatewayConnection, OnGatewayDisco
     handleScreenShareStopped(client: Socket, data: {
         roomId: string;
     }): void;
+    handleRecordingStarted(client: Socket, data: {
+        roomId: string;
+    }): void;
+    handleRecordingStopped(client: Socket, data: {
+        roomId: string;
+    }): void;
+    handleForceMuteMic(client: Socket, data: {
+        roomId: string;
+        peerId: string;
+    }): void;
+    handleForceMuteCam(client: Socket, data: {
+        roomId: string;
+        peerId: string;
+    }): void;
+    handleAllowMic(client: Socket, data: {
+        roomId: string;
+        peerId: string;
+    }): void;
+    handleAllowCam(client: Socket, data: {
+        roomId: string;
+        peerId: string;
+    }): void;
+    handleHandRaised(client: Socket, data: {
+        roomId: string;
+    }): void;
+    handleHandLowered(client: Socket, data: {
+        roomId: string;
+    }): void;
+    handleKickPeer(client: Socket, data: {
+        roomId: string;
+        peerId: string;
+    }): void;
 }

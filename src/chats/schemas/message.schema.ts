@@ -20,6 +20,9 @@ export class Message {
   @Prop({ default: false })
   isDeleted: boolean;
 
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
+  readBy: Types.ObjectId[];
+
   @Prop({ type: Types.ObjectId, ref: 'Message', required: false })
   replayTo?: Types.ObjectId;
 }

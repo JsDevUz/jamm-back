@@ -9,10 +9,17 @@ export declare class JoinRequest {
 }
 export declare class Chat {
     isGroup: boolean;
+    jammId?: number;
+    privateurl?: string;
     name?: string;
     avatar?: string;
     description?: string;
     members: Types.ObjectId[];
+    createdBy?: Types.ObjectId;
+    admins: {
+        userId: Types.ObjectId;
+        permissions: string[];
+    }[];
     lastMessage?: string;
     lastMessageAt?: Date;
     videoCallRoomId?: string;
@@ -39,6 +46,24 @@ export declare const ChatSchema: import("mongoose").Schema<Chat, import("mongoos
     id: string;
 }, {
     isGroup?: import("mongoose").SchemaDefinitionProperty<boolean, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    jammId?: import("mongoose").SchemaDefinitionProperty<number | undefined, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    privateurl?: import("mongoose").SchemaDefinitionProperty<string | undefined, Chat, Document<unknown, {}, Chat, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
         _id: Types.ObjectId;
@@ -75,6 +100,27 @@ export declare const ChatSchema: import("mongoose").Schema<Chat, import("mongoos
         id: string;
     }> | undefined;
     members?: import("mongoose").SchemaDefinitionProperty<Types.ObjectId[], Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    createdBy?: import("mongoose").SchemaDefinitionProperty<Types.ObjectId | undefined, Chat, Document<unknown, {}, Chat, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    admins?: import("mongoose").SchemaDefinitionProperty<{
+        userId: Types.ObjectId;
+        permissions: string[];
+    }[], Chat, Document<unknown, {}, Chat, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Chat & {
         _id: Types.ObjectId;

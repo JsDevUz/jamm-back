@@ -16,10 +16,15 @@ exports.UsersController = void 0;
 const common_1 = require("@nestjs/common");
 const users_service_1 = require("./users.service");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
+const platform_express_1 = require("@nestjs/platform-express");
+const common_2 = require("@nestjs/common");
 let UsersController = class UsersController {
     usersService;
     constructor(usersService) {
         this.usersService = usersService;
+    }
+    async uploadAvatar(req, file) {
+        return this.usersService.updateAvatar(req.user._id.toString(), file);
     }
     async getMe(req) {
         const user = await this.usersService.findById(req.user._id.toString());
@@ -36,8 +41,24 @@ let UsersController = class UsersController {
             return [];
         return this.usersService.searchUsers(query, req.user._id);
     }
+    async getUserByUsername(username) {
+        const user = await this.usersService.findByUsername(username);
+        if (!user)
+            throw new common_1.NotFoundException('Foydalanuvchi topilmadi');
+        const { password, ...safe } = user.toObject();
+        return safe;
+    }
 };
 exports.UsersController = UsersController;
+__decorate([
+    (0, common_2.Post)('avatar'),
+    (0, common_2.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_2.UploadedFile)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "uploadAvatar", null);
 __decorate([
     (0, common_1.Get)('me'),
     __param(0, (0, common_1.Request)()),
@@ -61,6 +82,13 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "searchUsers", null);
+__decorate([
+    (0, common_1.Get)('by-username/:username'),
+    __param(0, (0, common_1.Param)('username')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getUserByUsername", null);
 exports.UsersController = UsersController = __decorate([
     (0, common_1.Controller)('users'),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),

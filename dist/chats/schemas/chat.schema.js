@@ -22,10 +22,14 @@ class JoinRequest {
 exports.JoinRequest = JoinRequest;
 let Chat = class Chat {
     isGroup;
+    jammId;
+    privateurl;
     name;
     avatar;
     description;
     members;
+    createdBy;
+    admins;
     lastMessage;
     lastMessageAt;
     videoCallRoomId;
@@ -37,6 +41,14 @@ __decorate([
     (0, mongoose_1.Prop)({ required: true, default: false }),
     __metadata("design:type", Boolean)
 ], Chat.prototype, "isGroup", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Number, unique: true, sparse: true }),
+    __metadata("design:type", Number)
+], Chat.prototype, "jammId", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ unique: true, sparse: true }),
+    __metadata("design:type", String)
+], Chat.prototype, "privateurl", void 0);
 __decorate([
     (0, mongoose_1.Prop)(),
     __metadata("design:type", String)
@@ -53,6 +65,22 @@ __decorate([
     (0, mongoose_1.Prop)({ type: [{ type: mongoose_2.Types.ObjectId, ref: 'User' }] }),
     __metadata("design:type", Array)
 ], Chat.prototype, "members", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: mongoose_2.Types.ObjectId, ref: 'User' }),
+    __metadata("design:type", mongoose_2.Types.ObjectId)
+], Chat.prototype, "createdBy", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({
+        type: [
+            {
+                userId: { type: mongoose_2.Types.ObjectId, ref: 'User' },
+                permissions: [String],
+            },
+        ],
+        default: [],
+    }),
+    __metadata("design:type", Array)
+], Chat.prototype, "admins", void 0);
 __decorate([
     (0, mongoose_1.Prop)(),
     __metadata("design:type", String)

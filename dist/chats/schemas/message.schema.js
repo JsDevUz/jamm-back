@@ -18,6 +18,7 @@ let Message = class Message {
     content;
     isEdited;
     isDeleted;
+    readBy;
     replayTo;
 };
 exports.Message = Message;
@@ -41,6 +42,10 @@ __decorate([
     (0, mongoose_1.Prop)({ default: false }),
     __metadata("design:type", Boolean)
 ], Message.prototype, "isDeleted", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: [{ type: mongoose_2.Types.ObjectId, ref: 'User' }], default: [] }),
+    __metadata("design:type", Array)
+], Message.prototype, "readBy", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: mongoose_2.Types.ObjectId, ref: 'Message', required: false }),
     __metadata("design:type", mongoose_2.Types.ObjectId)

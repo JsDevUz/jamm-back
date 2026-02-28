@@ -2,7 +2,7 @@ import { ChatsService } from './chats.service';
 export declare class ChatsController {
     private readonly chatsService;
     constructor(chatsService: ChatsService);
-    getUserChats(req: any): Promise<import("./schemas/chat.schema").ChatDocument[]>;
+    getUserChats(req: any): Promise<any[]>;
     createChat(req: any, dto: {
         isGroup: boolean;
         name?: string;
@@ -10,6 +10,18 @@ export declare class ChatsController {
         avatar?: string;
         memberIds: string[];
     }): Promise<import("./schemas/chat.schema").ChatDocument>;
+    previewGroup(privateurl: string): Promise<{
+        id: string;
+        privateurl: string | undefined;
+        name: string | undefined;
+        avatar: string | undefined;
+        description: string | undefined;
+        memberCount: number;
+        isGroup: boolean;
+    }>;
+    resolveSlug(req: any, slug: string): Promise<{
+        jammId: number;
+    }>;
     getChat(req: any, id: string): Promise<import("./schemas/chat.schema").ChatDocument>;
     getChatMessages(req: any, id: string): Promise<import("./schemas/message.schema").MessageDocument[]>;
     sendMessage(req: any, id: string, body: {
@@ -20,6 +32,19 @@ export declare class ChatsController {
         content: string;
     }): Promise<import("./schemas/message.schema").MessageDocument>;
     deleteMessage(req: any, messageId: string): Promise<import("./schemas/message.schema").MessageDocument>;
+    joinGroupByLink(req: any, id: string): Promise<import("./schemas/chat.schema").ChatDocument>;
+    editChat(req: any, id: string, body: {
+        name?: string;
+        description?: string;
+        avatar?: string;
+        members?: string[];
+        admins?: {
+            userId: string;
+            permissions: string[];
+        }[];
+    }): Promise<import("./schemas/chat.schema").ChatDocument>;
+    uploadGroupAvatarOnly(req: any, file: Express.Multer.File): Promise<string>;
+    uploadAvatar(req: any, id: string, file: Express.Multer.File): Promise<string>;
     startVideoCall(req: any, id: string): Promise<{
         roomId: string;
     }>;

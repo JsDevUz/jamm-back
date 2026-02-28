@@ -6,6 +6,7 @@ export declare class Message {
     content: string;
     isEdited: boolean;
     isDeleted: boolean;
+    readBy: Types.ObjectId[];
     replayTo?: Types.ObjectId;
 }
 export declare const MessageSchema: import("mongoose").Schema<Message, import("mongoose").Model<Message, any, any, any, (Document<unknown, any, Message, any, import("mongoose").DefaultSchemaOptions> & Message & {
@@ -64,6 +65,15 @@ export declare const MessageSchema: import("mongoose").Schema<Message, import("m
         id: string;
     }> | undefined;
     isDeleted?: import("mongoose").SchemaDefinitionProperty<boolean, Message, Document<unknown, {}, Message, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Message & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    readBy?: import("mongoose").SchemaDefinitionProperty<Types.ObjectId[], Message, Document<unknown, {}, Message, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Message & {
         _id: Types.ObjectId;

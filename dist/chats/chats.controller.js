@@ -14,6 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatsController = void 0;
 const common_1 = require("@nestjs/common");
+const platform_express_1 = require("@nestjs/platform-express");
 const chats_service_1 = require("./chats.service");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
 let ChatsController = class ChatsController {
@@ -26,6 +27,12 @@ let ChatsController = class ChatsController {
     }
     createChat(req, dto) {
         return this.chatsService.createChat(req.user._id.toString(), dto);
+    }
+    previewGroup(privateurl) {
+        return this.chatsService.previewGroup(privateurl);
+    }
+    resolveSlug(req, slug) {
+        return this.chatsService.resolveSlug(slug, req.user._id.toString());
     }
     getChat(req, id) {
         return this.chatsService.getChat(id, req.user._id.toString());
@@ -41,6 +48,18 @@ let ChatsController = class ChatsController {
     }
     deleteMessage(req, messageId) {
         return this.chatsService.deleteMessage(messageId, req.user._id.toString());
+    }
+    joinGroupByLink(req, id) {
+        return this.chatsService.joinGroupByLink(id, req.user._id.toString());
+    }
+    editChat(req, id, body) {
+        return this.chatsService.editChat(id, req.user._id.toString(), body);
+    }
+    async uploadGroupAvatarOnly(req, file) {
+        return this.chatsService.uploadGroupAvatarOnly(file);
+    }
+    async uploadAvatar(req, id, file) {
+        return this.chatsService.updateAvatar(id, req.user._id.toString(), file);
     }
     startVideoCall(req, id) {
         return this.chatsService.startVideoCall(id, req.user._id.toString());
@@ -82,6 +101,23 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", void 0)
 ], ChatsController.prototype, "createChat", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Get)('preview/:privateurl'),
+    __param(0, (0, common_1.Param)('privateurl')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], ChatsController.prototype, "previewGroup", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Get)('resolve/:slug'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('slug')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], ChatsController.prototype, "resolveSlug", null);
 __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
     (0, common_1.Get)(':id'),
@@ -129,6 +165,46 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", void 0)
 ], ChatsController.prototype, "deleteMessage", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Post)(':id/join-link'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], ChatsController.prototype, "joinGroupByLink", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Patch)(':id'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, Object]),
+    __metadata("design:returntype", void 0)
+], ChatsController.prototype, "editChat", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Post)('upload-avatar'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.UploadedFile)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], ChatsController.prototype, "uploadGroupAvatarOnly", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Post)(':id/avatar'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.UploadedFile)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, Object]),
+    __metadata("design:returntype", Promise)
+], ChatsController.prototype, "uploadAvatar", null);
 __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
     (0, common_1.Post)(':id/call/start'),

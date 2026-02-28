@@ -17,6 +17,12 @@ export class Chat {
   @Prop({ required: true, default: false })
   isGroup: boolean;
 
+  @Prop({ type: Number, unique: true, sparse: true })
+  jammId?: number;
+
+  @Prop({ unique: true, sparse: true })
+  privateurl?: string;
+
   @Prop()
   name?: string;
 
@@ -28,6 +34,20 @@ export class Chat {
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }] })
   members: Types.ObjectId[];
+
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  createdBy?: Types.ObjectId;
+
+  @Prop({
+    type: [
+      {
+        userId: { type: Types.ObjectId, ref: 'User' },
+        permissions: [String],
+      },
+    ],
+    default: [],
+  })
+  admins: { userId: Types.ObjectId; permissions: string[] }[];
 
   @Prop()
   lastMessage?: string;

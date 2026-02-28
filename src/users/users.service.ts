@@ -1,12 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 
+import { R2Service } from '../common/services/r2.service';
+
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {}
+  constructor(
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private r2Service: R2Service,
+  ) {}
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
     const createdUser = new this.userModel(createUserDto);
@@ -54,9 +63,34 @@ export class UsersService {
       avatar?: string;
     },
   ): Promise<UserDocument | null> {
+    if (data.username) {
+      const existingUser = await this.userModel
+        .findOne({ username: data.username })
+        .exec();
+      if (existingUser && existingUser._id.toString() !== userId) {
+        throw new BadRequestException(
+          'Ushbu username band. Iltimos, boshqa username tanlang.',
+        );
+      }
+    }
+
     return this.userModel
       .findByIdAndUpdate(userId, { $set: data }, { new: true })
       .select('-password')
       .exec();
+  }
+
+  async updateAvatar(
+    userId: string,
+    file: Express.Multer.File,
+  ): Promise<UserDocument | null> {
+    try {
+      const avatarUrl = await this.r2Service.uploadFile(file, 'avatars');
+      return this.updateProfile(userId, { avatar: avatarUrl });
+    } catch (error) {
+      throw new InternalServerErrorException(
+        'Avatar yuklashda xatolik yuz berdi',
+      );
+    }
   }
 }

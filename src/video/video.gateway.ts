@@ -160,10 +160,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     room.knockQueue.delete(peerId);
 
-    // Notify the guest they're approved
+    // Notify the guest they're approved (with media locked for private rooms)
     this.server
       .to(peerId)
-      .emit('knock-approved', { roomId, title: room.title });
+      .emit('knock-approved', { roomId, title: room.title, mediaLocked: true });
 
     // Admit them using the stored socket reference
     this.admitPeer(entry.socket, roomId, entry.displayName, room);
@@ -249,5 +249,103 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string },
   ) {
     client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
+  }
+
+  // ─── Recording Relay ────────────────────────────────────────────────────────
+
+  @SubscribeMessage('recording-started')
+  handleRecordingStarted(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    client.to(data.roomId).emit('recording-started', { peerId: client.id });
+  }
+
+  @SubscribeMessage('recording-stopped')
+  handleRecordingStopped(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    client.to(data.roomId).emit('recording-stopped', { peerId: client.id });
+  }
+
+  // ─── Creator Media Controls ─────────────────────────────────────────────────
+
+  @SubscribeMessage('force-mute-mic')
+  handleForceMuteMic(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; peerId: string },
+  ) {
+    const room = this.rooms.get(data.roomId);
+    if (!room || room.creatorSocketId !== client.id) return;
+    this.server.to(data.peerId).emit('force-mute-mic');
+  }
+
+  @SubscribeMessage('force-mute-cam')
+  handleForceMuteCam(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; peerId: string },
+  ) {
+    const room = this.rooms.get(data.roomId);
+    if (!room || room.creatorSocketId !== client.id) return;
+    this.server.to(data.peerId).emit('force-mute-cam');
+  }
+
+  @SubscribeMessage('allow-mic')
+  handleAllowMic(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; peerId: string },
+  ) {
+    const room = this.rooms.get(data.roomId);
+    if (!room || room.creatorSocketId !== client.id) return;
+    this.server.to(data.peerId).emit('allow-mic');
+  }
+
+  @SubscribeMessage('allow-cam')
+  handleAllowCam(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; peerId: string },
+  ) {
+    const room = this.rooms.get(data.roomId);
+    if (!room || room.creatorSocketId !== client.id) return;
+    this.server.to(data.peerId).emit('allow-cam');
+  }
+
+  // ─── Hand Raise ─────────────────────────────────────────────────────────────
+
+  @SubscribeMessage('hand-raised')
+  handleHandRaised(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    client.to(data.roomId).emit('hand-raised', { peerId: client.id });
+  }
+
+  @SubscribeMessage('hand-lowered')
+  handleHandLowered(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    client.to(data.roomId).emit('hand-lowered', { peerId: client.id });
+  }
+
+  // ─── Kick Peer ──────────────────────────────────────────────────────────────
+
+  @SubscribeMessage('kick-peer')
+  handleKickPeer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; peerId: string },
+  ) {
+    const room = this.rooms.get(data.roomId);
+    if (!room || room.creatorSocketId !== client.id) return;
+    // Notify the kicked peer
+    this.server.to(data.peerId).emit('kicked');
+    // Notify others
+    client.to(data.roomId).emit('peer-left', { peerId: data.peerId });
+    // Remove from room
+    room.peers.delete(data.peerId);
+    // Force leave the socket from the room
+    const kickedSocket = this.server.sockets.sockets.get(data.peerId);
+    if (kickedSocket) kickedSocket.leave(data.roomId);
   }
 }

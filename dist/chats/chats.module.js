@@ -9,10 +9,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatsModule = void 0;
 const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
+const config_1 = require("@nestjs/config");
+const jwt_1 = require("@nestjs/jwt");
 const chats_service_1 = require("./chats.service");
 const chats_controller_1 = require("./chats.controller");
 const chat_schema_1 = require("./schemas/chat.schema");
 const message_schema_1 = require("./schemas/message.schema");
+const user_schema_1 = require("../users/schemas/user.schema");
+const chats_gateway_1 = require("./chats.gateway");
+const presence_module_1 = require("../presence/presence.module");
+const r2_service_1 = require("../common/services/r2.service");
 let ChatsModule = class ChatsModule {
 };
 exports.ChatsModule = ChatsModule;
@@ -22,9 +28,19 @@ exports.ChatsModule = ChatsModule = __decorate([
             mongoose_1.MongooseModule.forFeature([
                 { name: chat_schema_1.Chat.name, schema: chat_schema_1.ChatSchema },
                 { name: message_schema_1.Message.name, schema: message_schema_1.MessageSchema },
+                { name: user_schema_1.User.name, schema: user_schema_1.UserSchema },
             ]),
+            config_1.ConfigModule,
+            jwt_1.JwtModule.registerAsync({
+                imports: [config_1.ConfigModule],
+                inject: [config_1.ConfigService],
+                useFactory: (configService) => ({
+                    secret: configService.get('JWT_SECRET') || 'fallback-secret',
+                }),
+            }),
+            (0, common_1.forwardRef)(() => presence_module_1.PresenceModule),
         ],
-        providers: [chats_service_1.ChatsService],
+        providers: [chats_service_1.ChatsService, chats_gateway_1.ChatsGateway, r2_service_1.R2Service],
         controllers: [chats_controller_1.ChatsController],
         exports: [chats_service_1.ChatsService],
     })
