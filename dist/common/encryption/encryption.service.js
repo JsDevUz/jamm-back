@@ -71,9 +71,11 @@ let EncryptionService = class EncryptionService {
         };
     }
     decrypt(data) {
-        const decipher = crypto.createDecipheriv(this.algorithm, this.key, Buffer.from(data.iv, 'base64'));
-        decipher.setAuthTag(Buffer.from(data.authTag, 'base64'));
-        let decrypted = decipher.update(data.encryptedContent, 'base64', 'utf8');
+        const isLegacy = !data.keyVersion || data.keyVersion === 0;
+        const encoding = isLegacy ? 'hex' : 'base64';
+        const decipher = crypto.createDecipheriv(this.algorithm, this.key, Buffer.from(data.iv, encoding));
+        decipher.setAuthTag(Buffer.from(data.authTag, encoding));
+        let decrypted = decipher.update(data.encryptedContent, encoding, 'utf8');
         decrypted += decipher.final('utf8');
         return decrypted;
     }
