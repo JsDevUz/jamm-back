@@ -22,8 +22,11 @@ let ChatsController = class ChatsController {
     constructor(chatsService) {
         this.chatsService = chatsService;
     }
-    getUserChats(req) {
-        return this.chatsService.getUserChats(req.user._id.toString());
+    getUserChats(req, page, limit) {
+        return this.chatsService.getUserChats(req.user._id.toString(), {
+            page: Number(page) || 1,
+            limit: Number(limit) || 15,
+        });
     }
     createChat(req, dto) {
         return this.chatsService.createChat(req.user._id.toString(), dto);
@@ -37,8 +40,11 @@ let ChatsController = class ChatsController {
     getChat(req, id) {
         return this.chatsService.getChat(id, req.user._id.toString());
     }
-    getChatMessages(req, id) {
-        return this.chatsService.getChatMessages(id, req.user._id.toString());
+    getChatMessages(req, id, page, limit) {
+        return this.chatsService.getChatMessages(id, req.user._id.toString(), {
+            page: Number(page) || 1,
+            limit: Number(limit) || 30,
+        });
     }
     sendMessage(req, id, body) {
         return this.chatsService.sendMessage(id, req.user._id.toString(), body.content, body.replayToId);
@@ -82,14 +88,22 @@ let ChatsController = class ChatsController {
     respondToJoinRequest(req, id, requestId, body) {
         return this.chatsService.respondToJoinRequest(id, requestId, body.approved, req.user._id.toString());
     }
+    leaveChat(req, id) {
+        return this.chatsService.leaveChat(id, req.user._id.toString());
+    }
+    deleteChat(req, id) {
+        return this.chatsService.deleteChat(id, req.user._id.toString());
+    }
 };
 exports.ChatsController = ChatsController;
 __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
     (0, common_1.Get)(),
     __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Query)('page')),
+    __param(2, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [Object, Number, Number]),
     __metadata("design:returntype", void 0)
 ], ChatsController.prototype, "getUserChats", null);
 __decorate([
@@ -132,8 +146,10 @@ __decorate([
     (0, common_1.Get)(':id/messages'),
     __param(0, (0, common_1.Request)()),
     __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Query)('page')),
+    __param(3, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:paramtypes", [Object, String, Number, Number]),
     __metadata("design:returntype", void 0)
 ], ChatsController.prototype, "getChatMessages", null);
 __decorate([
@@ -266,6 +282,24 @@ __decorate([
     __metadata("design:paramtypes", [Object, String, String, Object]),
     __metadata("design:returntype", void 0)
 ], ChatsController.prototype, "respondToJoinRequest", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Post)(':id/leave'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], ChatsController.prototype, "leaveChat", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
+    (0, common_1.Delete)(':id'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], ChatsController.prototype, "deleteChat", null);
 exports.ChatsController = ChatsController = __decorate([
     (0, common_1.Controller)('chats'),
     __metadata("design:paramtypes", [chats_service_1.ChatsService])

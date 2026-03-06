@@ -25,6 +25,12 @@ export class AuthController {
     return this.authService.login(loginDto);
   }
 
+  @Get('verify/:token')
+  async verify(@Request() req) {
+    const { token } = req.params;
+    return this.authService.verifyEmail(token);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('me')
   async getMe(@Request() req) {

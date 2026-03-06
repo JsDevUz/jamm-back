@@ -30,7 +30,7 @@ __decorate([
 ], SignupDto.prototype, "password", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)({ message: 'Username kiritilishi shart' }),
+    (0, class_validator_1.IsOptional)(),
     __metadata("design:type", String)
 ], SignupDto.prototype, "username", void 0);
 __decorate([
@@ -40,7 +40,7 @@ __decorate([
 ], SignupDto.prototype, "nickname", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)({ message: 'Telefon raqam kiritilishi shart' }),
+    (0, class_validator_1.IsOptional)(),
     __metadata("design:type", String)
 ], SignupDto.prototype, "phone", void 0);
 //# sourceMappingURL=signup.dto.js.map

@@ -12,18 +12,37 @@ const mongoose_1 = require("@nestjs/mongoose");
 const courses_service_1 = require("./courses.service");
 const courses_controller_1 = require("./courses.controller");
 const course_schema_1 = require("./schemas/course.schema");
+const courses_gateway_1 = require("./courses.gateway");
 const encryption_module_1 = require("../common/encryption/encryption.module");
+const user_schema_1 = require("../users/schemas/user.schema");
+const r2_service_1 = require("../common/services/r2.service");
+const jwt_1 = require("@nestjs/jwt");
+const config_1 = require("@nestjs/config");
 let CoursesModule = class CoursesModule {
 };
 exports.CoursesModule = CoursesModule;
 exports.CoursesModule = CoursesModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            mongoose_1.MongooseModule.forFeature([{ name: course_schema_1.Course.name, schema: course_schema_1.CourseSchema }]),
+            mongoose_1.MongooseModule.forFeature([
+                { name: course_schema_1.Course.name, schema: course_schema_1.CourseSchema },
+                { name: user_schema_1.User.name, schema: user_schema_1.UserSchema },
+            ]),
+            jwt_1.JwtModule.registerAsync({
+                imports: [config_1.ConfigModule],
+                inject: [config_1.ConfigService],
+                useFactory: (config) => ({
+                    secret: config.get('JWT_SECRET'),
+                    signOptions: {
+                        expiresIn: config.get('JWT_EXPIRES_IN') || '7d',
+                    },
+                }),
+            }),
             encryption_module_1.EncryptionModule,
+            config_1.ConfigModule,
         ],
         controllers: [courses_controller_1.CoursesController],
-        providers: [courses_service_1.CoursesService],
+        providers: [courses_service_1.CoursesService, r2_service_1.R2Service, courses_gateway_1.CoursesGateway],
         exports: [courses_service_1.CoursesService],
     })
 ], CoursesModule);

@@ -22,4 +22,22 @@ export declare class PresenceGateway implements OnGatewayInit, OnGatewayConnecti
             status: string;
         };
     } | undefined>;
+    handleCallRequest(client: Socket, data: {
+        toUserId: string;
+        roomId: string;
+        callType?: string;
+    }): Promise<void>;
+    handleCallAccept(client: Socket, data: {
+        toUserId: string;
+        roomId: string;
+    }): Promise<void>;
+    handleCallReject(client: Socket, data: {
+        toUserId: string;
+        roomId: string;
+        reason?: string;
+    }): Promise<void>;
+    handleCallCancel(client: Socket, data: {
+        toUserId: string;
+        roomId: string;
+    }): Promise<void>;
 }

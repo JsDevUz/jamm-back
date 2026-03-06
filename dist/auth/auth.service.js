@@ -46,39 +46,44 @@ exports.AuthService = void 0;
 const common_1 = require("@nestjs/common");
 const jwt_1 = require("@nestjs/jwt");
 const bcrypt = __importStar(require("bcrypt"));
+const uuid_1 = require("uuid");
 const users_service_1 = require("../users/users.service");
+const email_service_1 = require("../common/services/email.service");
 let AuthService = class AuthService {
     usersService;
     jwtService;
-    constructor(usersService, jwtService) {
+    emailService;
+    constructor(usersService, jwtService, emailService) {
         this.usersService = usersService;
         this.jwtService = jwtService;
+        this.emailService = emailService;
     }
     async signup(signupDto) {
         const existingEmail = await this.usersService.findByEmail(signupDto.email);
         if (existingEmail) {
             throw new common_1.ConflictException("Bu email allaqachon ro'yxatdan o'tgan");
         }
-        const existingUsername = await this.usersService.findByUsername(signupDto.username);
-        if (existingUsername) {
-            throw new common_1.ConflictException('Bu username allaqachon band');
-        }
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(signupDto.password, salt);
+        const verificationToken = (0, uuid_1.v4)();
         const user = await this.usersService.create({
             ...signupDto,
             password: hashedPassword,
+            isVerified: false,
+            verificationToken,
         });
-        const token = this.generateToken(user._id.toString(), user.email);
+        await this.emailService.sendVerificationEmail(user.email, verificationToken);
         return {
-            access_token: token,
-            user: this.sanitizeUser(user),
+            message: "Ro'yxatdan o'tish muvaffaqiyatli! Emailingizga tasdiqlash havolasi yuborildi.",
         };
     }
     async login(loginDto) {
         const user = await this.usersService.findByEmail(loginDto.email);
         if (!user) {
             throw new common_1.UnauthorizedException("Email yoki parol noto'g'ri");
+        }
+        if (user.isVerified === false) {
+            throw new common_1.UnauthorizedException('Emailingiz tasdiqlanmagan. Iltimos, emailga kelgan havola orqali tasdiqlang.');
         }
         const isPasswordValid = await bcrypt.compare(loginDto.password, user.password);
         if (!isPasswordValid) {
@@ -87,6 +92,20 @@ let AuthService = class AuthService {
         const token = this.generateToken(user._id.toString(), user.email);
         return {
             access_token: token,
+            user: this.sanitizeUser(user),
+        };
+    }
+    async verifyEmail(token) {
+        const user = await this.usersService.findByVerificationToken(token);
+        if (!user) {
+            throw new common_1.NotFoundException("Tasdiqlash kodi noto'g'ri yoki allaqachon foydalanilgan");
+        }
+        user.isVerified = true;
+        user.verificationToken = null;
+        await user.save();
+        const jwt = this.generateToken(user._id.toString(), user.email);
+        return {
+            access_token: jwt,
             user: this.sanitizeUser(user),
         };
     }
@@ -103,6 +122,7 @@ exports.AuthService = AuthService;
 exports.AuthService = AuthService = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [users_service_1.UsersService,
-        jwt_1.JwtService])
+        jwt_1.JwtService,
+        email_service_1.EmailService])
 ], AuthService);
 //# sourceMappingURL=auth.service.js.map

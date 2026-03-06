@@ -11,17 +11,28 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UserSchema = exports.User = void 0;
 const mongoose_1 = require("@nestjs/mongoose");
+const mongoose_2 = require("mongoose");
 let User = class User {
     email;
     password;
     username;
     nickname;
     phone;
+    gender;
+    age;
     avatar;
     lastSeen;
     premiumStatus;
     premiumExpiresAt;
     hasUsedPromo;
+    bio;
+    followers;
+    following;
+    isVerified;
+    verificationToken;
+    jammId;
+    isOnboardingCompleted;
+    onboardingData;
 };
 exports.User = User;
 __decorate([
@@ -33,7 +44,13 @@ __decorate([
     __metadata("design:type", String)
 ], User.prototype, "password", void 0);
 __decorate([
-    (0, mongoose_1.Prop)({ required: true, unique: true, trim: true }),
+    (0, mongoose_1.Prop)({
+        required: false,
+        unique: true,
+        sparse: true,
+        trim: true,
+        lowercase: true,
+    }),
     __metadata("design:type", String)
 ], User.prototype, "username", void 0);
 __decorate([
@@ -41,9 +58,21 @@ __decorate([
     __metadata("design:type", String)
 ], User.prototype, "nickname", void 0);
 __decorate([
-    (0, mongoose_1.Prop)({ required: true, trim: true }),
+    (0, mongoose_1.Prop)({ required: false, trim: true }),
     __metadata("design:type", String)
 ], User.prototype, "phone", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({
+        type: String,
+        enum: ['male', 'female', null],
+        default: null,
+    }),
+    __metadata("design:type", String)
+], User.prototype, "gender", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Number, default: null }),
+    __metadata("design:type", Number)
+], User.prototype, "age", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: '' }),
     __metadata("design:type", String)
@@ -64,8 +93,46 @@ __decorate([
     (0, mongoose_1.Prop)({ default: false }),
     __metadata("design:type", Boolean)
 ], User.prototype, "hasUsedPromo", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], User.prototype, "bio", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: [{ type: mongoose_2.Types.ObjectId, ref: 'User' }], default: [] }),
+    __metadata("design:type", Array)
+], User.prototype, "followers", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: [{ type: mongoose_2.Types.ObjectId, ref: 'User' }], default: [] }),
+    __metadata("design:type", Array)
+], User.prototype, "following", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], User.prototype, "isVerified", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: String, default: null }),
+    __metadata("design:type", Object)
+], User.prototype, "verificationToken", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ unique: true, sparse: true }),
+    __metadata("design:type", Number)
+], User.prototype, "jammId", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], User.prototype, "isOnboardingCompleted", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object, default: {} }),
+    __metadata("design:type", Object)
+], User.prototype, "onboardingData", void 0);
 exports.User = User = __decorate([
     (0, mongoose_1.Schema)({ timestamps: true })
 ], User);
 exports.UserSchema = mongoose_1.SchemaFactory.createForClass(User);
+exports.UserSchema.pre('save', async function () {
+    if (this.isNew && !this.jammId) {
+        const id = Math.floor(100000 + Math.random() * 900000);
+        this.jammId = id;
+    }
+});
 //# sourceMappingURL=user.schema.js.map

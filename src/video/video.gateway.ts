@@ -8,6 +8,9 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { PremiumService } from '../premium/premium.service';
 
 interface KnockEntry {
   displayName: string;
@@ -19,6 +22,7 @@ interface RoomInfo {
   isPrivate: boolean;
   title: string;
   creatorSocketId: string;
+  creatorUserId?: string;
   knockQueue: Map<string, KnockEntry>;
 }
 
@@ -32,7 +36,30 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private rooms = new Map<string, RoomInfo>();
 
-  handleConnection(client: Socket) {
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    private readonly premiumService: PremiumService,
+  ) {}
+
+  async handleConnection(client: Socket) {
+    try {
+      const token =
+        client.handshake?.auth?.token ||
+        (client.handshake?.query?.token as string);
+
+      if (token) {
+        const secret =
+          this.configService.get<string>('JWT_SECRET') || 'fallback-secret';
+        const payload = await this.jwtService.verifyAsync(token, { secret });
+        client.data.user = {
+          _id: payload.sub,
+          email: payload.email,
+        };
+      }
+    } catch (err) {
+      console.log(`[Video] auth error for ${client.id}:`, err.message);
+    }
     console.log(`[Video] connected: ${client.id}`);
   }
 
@@ -61,7 +88,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ─── Room Management ────────────────────────────────────────────────────────
 
   @SubscribeMessage('create-room')
-  handleCreateRoom(
+  async handleCreateRoom(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
@@ -72,11 +99,46 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     },
   ) {
     const { roomId, displayName, isPrivate = false, title = '' } = data;
+
+    const userId = client.data?.user?._id;
+    if (!userId) {
+      client.emit('error', {
+        message: 'Authentication required to create a room',
+      });
+      return;
+    }
+
+    let activeRoomsCount = 0;
+    this.rooms.forEach((room) => {
+      if (room.creatorUserId === userId) {
+        activeRoomsCount++;
+      }
+    });
+
+    try {
+      const status = await this.premiumService.getPremiumStatus(userId);
+      const isPremium = status === 'active';
+      const limit = isPremium ? 3 : 1;
+
+      if (activeRoomsCount >= limit) {
+        client.emit('error', {
+          message:
+            "Siz maksimal darajadagi meetlar soniga yetdingiz. Ko'proq ochish uchun Premium obunani faollashtiring.",
+        });
+        return;
+      }
+    } catch (err) {
+      console.error('[Video] Premium check error:', err);
+      client.emit('error', { message: 'Failed to check premium status' });
+      return;
+    }
+
     this.rooms.set(roomId, {
       peers: new Map([[client.id, displayName]]),
       isPrivate,
       title,
       creatorSocketId: client.id,
+      creatorUserId: userId,
       knockQueue: new Map(),
     });
     client.join(roomId);

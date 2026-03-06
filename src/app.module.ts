@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { CoursesModule } from './courses/courses.module';
@@ -8,6 +11,9 @@ import { ChatsModule } from './chats/chats.module';
 import { VideoModule } from './video/video.module';
 import { PresenceModule } from './presence/presence.module';
 import { PremiumModule } from './premium/premium.module';
+import { MeetsModule } from './meets/meets.module';
+import { PostsModule } from './posts/posts.module';
+import { ArenaModule } from './arena/arena.module';
 
 @Module({
   imports: [
@@ -19,6 +25,12 @@ import { PremiumModule } from './premium/premium.module';
         uri: configService.get<string>('MONGODB_URI'),
       }),
     }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
     AuthModule,
     UsersModule,
     CoursesModule,
@@ -26,6 +38,15 @@ import { PremiumModule } from './premium/premium.module';
     VideoModule,
     PresenceModule,
     PremiumModule,
+    MeetsModule,
+    PostsModule,
+    ArenaModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

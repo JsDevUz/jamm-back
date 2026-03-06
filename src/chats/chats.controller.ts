@@ -12,6 +12,7 @@ import {
   Optional,
   UseInterceptors,
   UploadedFile,
+  Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ChatsService } from './chats.service';
@@ -23,8 +24,15 @@ export class ChatsController {
 
   @UseGuards(JwtAuthGuard)
   @Get()
-  getUserChats(@Request() req) {
-    return this.chatsService.getUserChats(req.user._id.toString());
+  getUserChats(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.chatsService.getUserChats(req.user._id.toString(), {
+      page: Number(page) || 1,
+      limit: Number(limit) || 15,
+    });
   }
 
   @UseGuards(JwtAuthGuard)
@@ -63,8 +71,16 @@ export class ChatsController {
 
   @UseGuards(JwtAuthGuard)
   @Get(':id/messages')
-  getChatMessages(@Request() req, @Param('id') id: string) {
-    return this.chatsService.getChatMessages(id, req.user._id.toString());
+  getChatMessages(
+    @Request() req,
+    @Param('id') id: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.chatsService.getChatMessages(id, req.user._id.toString(), {
+      page: Number(page) || 1,
+      limit: Number(limit) || 30,
+    });
   }
 
   @UseGuards(JwtAuthGuard)
@@ -204,5 +220,17 @@ export class ChatsController {
       body.approved,
       req.user._id.toString(),
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/leave')
+  leaveChat(@Request() req, @Param('id') id: string) {
+    return this.chatsService.leaveChat(id, req.user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id')
+  deleteChat(@Request() req, @Param('id') id: string) {
+    return this.chatsService.deleteChat(id, req.user._id.toString());
   }
 }

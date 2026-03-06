@@ -57,6 +57,61 @@ let R2Service = class R2Service {
             throw new common_1.InternalServerErrorException('Faylni yuklashda xatolik yuz berdi');
         }
     }
+    async getFileStream(key, range) {
+        try {
+            let cleanKey = key;
+            if (this.publicDomain && key.startsWith(this.publicDomain)) {
+                cleanKey = key.replace(`${this.publicDomain}/`, '');
+            }
+            else if (key.startsWith('http')) {
+                const parts = key.split('/');
+                cleanKey = parts.slice(3).join('/');
+            }
+            const command = new client_s3_1.GetObjectCommand({
+                Bucket: this.bucketName,
+                Key: cleanKey,
+                Range: range || undefined,
+            });
+            const response = await this.s3Client.send(command);
+            return {
+                stream: response.Body,
+                contentType: response.ContentType || 'application/octet-stream',
+                contentLength: response.ContentLength || 0,
+                contentRange: response.ContentRange,
+                acceptRanges: response.AcceptRanges,
+            };
+        }
+        catch (error) {
+            console.error('R2 GetStream Error:', error);
+            throw new common_1.InternalServerErrorException("Faylni o'qishda xatolik yuz berdi");
+        }
+    }
+    async deleteFile(key) {
+        try {
+            if (!key)
+                return false;
+            let cleanKey = key;
+            if (this.publicDomain && key.includes(this.publicDomain)) {
+                cleanKey = key.split(`${this.publicDomain}/`)[1];
+            }
+            else if (key.startsWith('http')) {
+                const parts = key.split('/');
+                cleanKey = parts.slice(3).join('/');
+            }
+            if (!cleanKey)
+                return false;
+            const command = new client_s3_1.DeleteObjectCommand({
+                Bucket: this.bucketName,
+                Key: cleanKey,
+            });
+            await this.s3Client.send(command);
+            return true;
+        }
+        catch (error) {
+            console.error('R2 Delete Error:', error);
+            return false;
+        }
+    }
 };
 exports.R2Service = R2Service;
 exports.R2Service = R2Service = __decorate([

@@ -128,13 +128,19 @@ let ChatsService = class ChatsService {
             return { ...message, content: '[Decryption Error]' };
         }
     }
-    async getUserChats(userId) {
-        const chats = await this.chatModel
-            .find({ members: new mongoose_2.Types.ObjectId(userId) })
-            .populate('members', 'username nickname avatar')
-            .sort({ updatedAt: -1 })
-            .lean()
-            .exec();
+    async getUserChats(userId, pagination = { page: 1, limit: 15 }) {
+        const skip = (pagination.page - 1) * pagination.limit;
+        const [chats, total] = await Promise.all([
+            this.chatModel
+                .find({ members: new mongoose_2.Types.ObjectId(userId) })
+                .populate('members', 'username nickname avatar premiumStatus bio jammId')
+                .sort({ updatedAt: -1 })
+                .skip(skip)
+                .limit(pagination.limit)
+                .lean()
+                .exec(),
+            this.chatModel.countDocuments({ members: new mongoose_2.Types.ObjectId(userId) }),
+        ]);
         const chatsWithUnread = await Promise.all(chats.map(async (chat) => {
             const unreadCount = await this.messageModel.countDocuments({
                 chatId: chat._id,
@@ -158,13 +164,38 @@ let ChatsService = class ChatsService {
                     decryptedLastMessage = '[Decryption Error]';
                 }
             }
+            const chatObj = chat.toObject
+                ? chat.toObject()
+                : chat;
+            console.log(chatObj, 'lllll');
             return {
-                ...chat,
+                _id: chatObj._id,
+                jammId: chatObj.jammId,
+                name: chatObj.name,
+                description: chatObj.description,
+                avatar: chatObj.avatar,
+                isGroup: chatObj.isGroup,
+                privateurl: chatObj.privateurl,
+                members: chatObj.members,
+                createdBy: chatObj.createdBy,
+                admins: chatObj.admins,
+                isSavedMessages: chatObj.isSavedMessages,
+                urlSlug: chatObj.urlSlug,
                 lastMessage: decryptedLastMessage,
+                lastMessageAt: chatObj.lastMessageAt,
+                updatedAt: chatObj.updatedAt,
+                createdAt: chatObj.createdAt,
                 unreadCount,
             };
         }));
-        return chatsWithUnread;
+        console.log(chatsWithUnread);
+        return {
+            data: chatsWithUnread,
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            totalPages: Math.ceil(total / pagination.limit),
+        };
     }
     async createChat(userId, dto) {
         const members = [
@@ -177,16 +208,22 @@ let ChatsService = class ChatsService {
                 isGroup: true,
             });
             const premiumStatus = await this.premiumService.getPremiumStatus(userId);
-            const limit = premiumStatus === 'active' ? 10 : 2;
+            const limit = premiumStatus === 'active' ? 3 : 1;
             if (groupCount >= limit) {
                 throw new common_1.ForbiddenException(`Siz maksimal darajadagi guruhlar soniga yetdingiz (${limit}). Ko'proq guruh ochish uchun Premium obunani faollashtiring.`);
+            }
+            if (members.length > 40) {
+                throw new common_1.BadRequestException("Guruh a'zolari soni 40 dan oshmasligi kerak");
             }
         }
         if (!dto.isGroup && members.length === 2) {
             const existing = await this.chatModel
                 .findOne({
                 isGroup: false,
-                members: { $all: members, $size: 2 },
+                $or: [
+                    { members: [members[0], members[1]] },
+                    { members: [members[1], members[0]] },
+                ],
             })
                 .exec();
             if (existing)
@@ -204,90 +241,103 @@ let ChatsService = class ChatsService {
         });
     }
     hasPermission(chat, userId, permission) {
+        console.log(chat, chat.createdBy?.toString(), userId, permission);
         if (chat.createdBy?.toString() === userId)
             return true;
         if (!chat.admins)
             return false;
-        const admin = chat.admins.find((a) => a.userId.toString() === userId);
+        const admin = chat.admins.find((a) => {
+            const aid = a.userId?._id || a.userId || a.id;
+            return aid?.toString() === userId;
+        });
         if (!admin)
             return false;
-        return admin.permissions.includes(permission);
+        if (permission === 'any')
+            return true;
+        return (admin.permissions.includes(permission) ||
+            admin.permissions.includes('all'));
     }
     async editChat(chatId, userId, dto) {
         const chat = await this.getChat(chatId, userId);
         if (!chat.isGroup) {
             throw new common_1.BadRequestException("Faqat guruh ma'lumotlarini o'zgartirish mumkin");
         }
+        const canEditInfo = this.hasPermission(chat, userId, 'edit_group_info');
+        const canAddAdmins = this.hasPermission(chat, userId, 'add_admins');
+        const canAddMembers = this.hasPermission(chat, userId, 'add_members');
+        const canRemoveMembers = this.hasPermission(chat, userId, 'remove_members');
+        const isOwnerOrAdmin = this.hasPermission(chat, userId, 'any');
         const isInfoEdit = dto.name !== undefined ||
             dto.description !== undefined ||
             dto.avatar !== undefined;
-        if (isInfoEdit && !this.hasPermission(chat, userId, 'edit_group_info')) {
+        if (isInfoEdit && !canEditInfo) {
             throw new common_1.ForbiddenException("Sizda guruh ma'lumotlarini tahrirlash huquqi yo'q");
         }
-        const oldMemberIds = chat.members.map((m) => m._id ? m._id.toString() : m.toString());
+        const oldMemberIds = chat.members.map((m) => (m._id ? m._id : m).toString());
         let currentMemberIds = new Set(oldMemberIds);
         if (dto.admins !== undefined) {
-            if (!this.hasPermission(chat, userId, 'add_admins')) {
+            if (!canAddAdmins) {
                 throw new common_1.ForbiddenException("Sizda adminlarni boshqarish huquqi yo'q");
             }
-            chat.admins = dto.admins.map((a) => ({
+            chat.set('admins', dto.admins.map((a) => ({
                 userId: new mongoose_2.Types.ObjectId(a.userId),
                 permissions: a.permissions,
-            }));
-            dto.admins.forEach((a) => currentMemberIds.add(a.userId));
+            })));
+            dto.admins.forEach((a) => {
+                currentMemberIds.add(a.userId.toString());
+            });
         }
         if (dto.members !== undefined) {
-            const newMemberIds = dto.members;
+            const newMemberIds = dto.members.map((id) => id.toString());
             const added = newMemberIds.filter((id) => !currentMemberIds.has(id));
-            if (added.length > 0 &&
-                !this.hasPermission(chat, userId, 'add_members')) {
+            if (added.length > 0 && !canAddMembers) {
                 throw new common_1.ForbiddenException("Sizda a'zo qo'shish huquqi yo'q");
             }
             const removed = Array.from(currentMemberIds).filter((id) => !newMemberIds.includes(id));
             if (removed.length > 0) {
                 const onlySelfRemoved = removed.length === 1 && removed[0] === userId;
-                if (!onlySelfRemoved &&
-                    !this.hasPermission(chat, userId, 'remove_members')) {
+                if (!onlySelfRemoved && !canRemoveMembers) {
                     throw new common_1.ForbiddenException("Sizda a'zo o'chirish huquqi yo'q");
                 }
             }
             currentMemberIds = new Set(newMemberIds);
             if (chat.admins) {
-                chat.admins.forEach((a) => currentMemberIds.add(String(a.userId || a.id)));
+                chat.admins.forEach((a) => {
+                    const aid = (a.userId?._id || a.userId).toString();
+                    currentMemberIds.add(aid);
+                });
             }
         }
-        if (!currentMemberIds.has(userId)) {
-            if (chat.createdBy?.toString() === userId) {
-                currentMemberIds.add(userId);
-            }
+        if (!currentMemberIds.has(userId) && isOwnerOrAdmin) {
+            currentMemberIds.add(userId);
         }
-        chat.members = Array.from(currentMemberIds).map((id) => new mongoose_2.Types.ObjectId(id));
+        if (currentMemberIds.size > 40) {
+            throw new common_1.BadRequestException("Guruh a'zolari soni 40 dan oshmasligi kerak");
+        }
+        chat.set('members', Array.from(currentMemberIds).map((id) => new mongoose_2.Types.ObjectId(id)));
+        chat.markModified('members');
+        chat.markModified('admins');
         if (dto.name !== undefined)
             chat.name = dto.name;
         if (dto.description !== undefined)
             chat.description = dto.description;
         if (dto.avatar !== undefined)
             chat.avatar = dto.avatar;
-        await chat.save();
-        const updated = await this.getChat(chatId, userId);
-        const updatedMembers = updated.members;
-        const updatedAdmins = updated.admins;
-        const updatedCreatedBy = updated.createdBy;
+        const updated = await chat.save();
         const rooms = new Set([`chat_${chatId}`]);
-        if (oldMemberIds.length > 0) {
-            oldMemberIds.forEach((id) => rooms.add(`user_${id}`));
-        }
-        if (chat.members) {
-            chat.members.forEach((m) => rooms.add(`user_${m._id ? m._id.toString() : m.toString()}`));
-        }
+        oldMemberIds.forEach((id) => rooms.add(`user_${id}`));
+        updated.members.forEach((m) => {
+            const id = (m._id ? m._id : m).toString();
+            rooms.add(`user_${id}`);
+        });
         this.chatsGateway.server.to(Array.from(rooms)).emit('chat_updated', {
             chatId,
-            name: chat.name,
-            description: chat.description,
-            avatar: chat.avatar,
-            members: updatedMembers,
-            createdBy: updatedCreatedBy,
-            admins: updatedAdmins,
+            name: updated.name,
+            description: updated.description,
+            avatar: updated.avatar,
+            members: updated.members,
+            createdBy: updated.createdBy,
+            admins: updated.admins,
         });
         return updated;
     }
@@ -315,7 +365,7 @@ let ChatsService = class ChatsService {
             _id: chatId,
             members: new mongoose_2.Types.ObjectId(userId),
         })
-            .populate('members', 'username nickname avatar')
+            .populate('members', 'username nickname avatar premiumStatus')
             .exec();
         if (!chat)
             throw new common_1.NotFoundException("Chat topilmadi yoki huquq yo'q");
@@ -404,19 +454,51 @@ let ChatsService = class ChatsService {
         }
         return this.getChat(chat._id.toString(), userId);
     }
-    async getChatMessages(chatId, userId) {
+    async getChatMessages(chatId, userId, pagination) {
         const chat = await this.getChat(chatId, userId);
         const strategy = this.getEncryptionStrategy(chat);
-        const messages = await this.messageModel
-            .find({ chatId: new mongoose_2.Types.ObjectId(chatId) })
-            .populate('senderId', 'username nickname avatar')
-            .populate({
-            path: 'replayTo',
-            populate: { path: 'senderId', select: 'username nickname avatar' },
-        })
-            .sort({ createdAt: 1 })
-            .exec();
-        return messages.map((m) => this.decryptMessage(m.toObject(), strategy));
+        const { page, limit } = pagination;
+        const skip = (page - 1) * limit;
+        const [messagesDesc, total] = await Promise.all([
+            this.messageModel
+                .find({ chatId: new mongoose_2.Types.ObjectId(chatId) })
+                .populate('senderId', 'username nickname avatar premiumStatus')
+                .populate({
+                path: 'replayTo',
+                populate: {
+                    path: 'senderId',
+                    select: 'username nickname avatar premiumStatus',
+                },
+            })
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .exec(),
+            this.messageModel.countDocuments({ chatId: new mongoose_2.Types.ObjectId(chatId) }),
+        ]);
+        const messages = messagesDesc.reverse();
+        const data = messages.map((m) => {
+            const decrypted = this.decryptMessage(m.toObject(), strategy);
+            return {
+                _id: decrypted._id,
+                chatId: decrypted.chatId,
+                senderId: decrypted.senderId,
+                content: decrypted.content,
+                isEdited: decrypted.isEdited,
+                isDeleted: decrypted.isDeleted,
+                readBy: decrypted.readBy,
+                replayTo: decrypted.replayTo,
+                createdAt: decrypted.createdAt,
+                updatedAt: decrypted.updatedAt,
+            };
+        });
+        return {
+            data,
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+        };
     }
     async sendMessage(chatId, userId, content, replayToId) {
         const chat = await this.getChat(chatId, userId);
@@ -449,7 +531,10 @@ let ChatsService = class ChatsService {
             { path: 'senderId', select: 'username nickname avatar' },
             {
                 path: 'replayTo',
-                populate: { path: 'senderId', select: 'username nickname avatar' },
+                populate: {
+                    path: 'senderId',
+                    select: 'username nickname avatar premiumStatus',
+                },
             },
         ]);
         const decryptedMessage = this.decryptMessage(populatedMessage.toObject(), strategy);
@@ -487,7 +572,10 @@ let ChatsService = class ChatsService {
             { path: 'senderId', select: 'username nickname avatar' },
             {
                 path: 'replayTo',
-                populate: { path: 'senderId', select: 'username nickname avatar' },
+                populate: {
+                    path: 'senderId',
+                    select: 'username nickname avatar premiumStatus',
+                },
             },
         ]);
         const decryptedMessage = this.decryptMessage(populatedMessage.toObject(), strategy);
@@ -517,7 +605,10 @@ let ChatsService = class ChatsService {
             { path: 'senderId', select: 'username nickname avatar' },
             {
                 path: 'replayTo',
-                populate: { path: 'senderId', select: 'username nickname avatar' },
+                populate: {
+                    path: 'senderId',
+                    select: 'username nickname avatar premiumStatus',
+                },
             },
         ]);
         const chat = await this.chatModel.findById(message.chatId);
@@ -645,6 +736,59 @@ let ChatsService = class ChatsService {
             status: request.status,
             roomId: request.status === 'approved' ? chat.videoCallRoomId : undefined,
         };
+    }
+    async deleteChat(chatId, userId) {
+        const chat = await this.chatModel.findById(chatId).exec();
+        if (!chat)
+            throw new common_1.NotFoundException('Suhbat topilmadi');
+        const isMember = chat.members.some((m) => m.toString() === userId);
+        if (!isMember) {
+            throw new common_1.ForbiddenException("Sizda ushbu suhbatni o'chirish huquqi yo'q");
+        }
+        if (chat.isGroup && chat.createdBy?.toString() !== userId) {
+            throw new common_1.ForbiddenException("Faqat guruh yaratuvchisi guruhni o'chira oladi");
+        }
+        const memberIds = chat.members.map((m) => m.toString());
+        await this.messageModel
+            .deleteMany({ chatId: new mongoose_2.Types.ObjectId(chatId) })
+            .exec();
+        await this.chatModel.findByIdAndDelete(chatId).exec();
+        memberIds.forEach((mId) => {
+            this.chatsGateway.server
+                .to(`user_${mId}`)
+                .emit('chat_deleted', { chatId });
+        });
+        return { success: true };
+    }
+    async leaveChat(chatId, userId) {
+        const chat = await this.chatModel.findById(chatId).exec();
+        if (!chat)
+            throw new common_1.NotFoundException('Suhbat topilmadi');
+        if (!chat.isGroup) {
+            throw new common_1.ForbiddenException('Faqat guruhdan chiqish mumkin');
+        }
+        const isMember = chat.members.some((m) => m.toString() === userId);
+        if (!isMember) {
+            throw new common_1.ForbiddenException('Siz ushbu guruh a’zosi emassiz');
+        }
+        if (chat.createdBy?.toString() === userId) {
+            throw new common_1.ForbiddenException('Guruh yaratuvchisi guruhni tark eta olmaydi, faqat o’chirishi mumkin');
+        }
+        chat.members = chat.members.filter((m) => m.toString() !== userId);
+        chat.admins = chat.admins.filter((a) => a.userId.toString() !== userId);
+        await chat.save();
+        this.chatsGateway.server
+            .to(`user_${userId}`)
+            .emit('chat_deleted', { chatId });
+        const remainingMembers = chat.members.map((m) => m.toString());
+        remainingMembers.forEach((mId) => {
+            this.chatsGateway.server.to(`user_${mId}`).emit('chat_updated', {
+                _id: chat._id,
+                members: chat.members,
+                admins: chat.admins,
+            });
+        });
+        return { success: true };
     }
 };
 exports.ChatsService = ChatsService;

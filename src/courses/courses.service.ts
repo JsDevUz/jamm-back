@@ -5,14 +5,20 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Course, CourseDocument } from './schemas/course.schema';
+import { Course, CourseSchema, CourseDocument } from './schemas/course.schema';
 import { EncryptionService } from '../common/encryption/encryption.service';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { R2Service } from '../common/services/r2.service';
+import { CoursesGateway } from './courses.gateway';
 
 @Injectable()
 export class CoursesService {
   constructor(
     @InjectModel(Course.name) private courseModel: Model<CourseDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private encryptionService: EncryptionService,
+    private r2Service: R2Service,
+    private coursesGateway: CoursesGateway,
   ) {}
 
   private decryptText(item: any): any {
@@ -55,27 +61,69 @@ export class CoursesService {
 
     // Decrypt comments and replies
     course.lessons = course.lessons.map((lesson: any) => ({
-      ...lesson,
+      _id: lesson._id,
+      title: lesson.title,
+      type: lesson.type,
+      videoUrl: lesson.videoUrl,
+      fileUrl: lesson.fileUrl,
+      fileName: lesson.fileName,
+      fileSize: lesson.fileSize,
+      urlSlug: lesson.urlSlug,
+      description: lesson.description,
+      views: lesson.views,
+      addedAt: lesson.addedAt,
       comments: (lesson.comments || []).map((comment: any) => {
         const decryptedComment = this.decryptText(comment);
         return {
-          ...decryptedComment,
-          replies: (decryptedComment.replies || []).map((reply: any) =>
-            this.decryptText(reply),
-          ),
+          _id: decryptedComment._id,
+          userId: decryptedComment.userId,
+          userName: decryptedComment.userName,
+          userAvatar: decryptedComment.userAvatar,
+          text: decryptedComment.text,
+          createdAt: decryptedComment.createdAt,
+          replies: (decryptedComment.replies || []).map((reply: any) => {
+            const dr = this.decryptText(reply);
+            return {
+              _id: dr._id,
+              userId: dr.userId,
+              userName: dr.userName,
+              userAvatar: dr.userAvatar,
+              text: dr.text,
+              createdAt: dr.createdAt,
+            };
+          }),
         };
       }),
     }));
 
-    return course;
+    // strip __v
+    const { __v, ...safeCourse } = course;
+    return safeCourse;
   }
 
-  async getAllCoursesForUser(userId: string): Promise<any[]> {
-    const courses = await this.courseModel
-      .find()
-      .sort({ createdAt: -1 })
-      .exec();
-    return courses.map((c) => this.sanitizeCourse(c, userId));
+  async getAllCoursesForUser(
+    userId: string,
+    pagination: { page: number; limit: number } = { page: 1, limit: 15 },
+  ): Promise<any> {
+    const skip = (pagination.page - 1) * pagination.limit;
+
+    const [courses, total] = await Promise.all([
+      this.courseModel
+        .find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pagination.limit)
+        .exec(),
+      this.courseModel.countDocuments(),
+    ]);
+
+    return {
+      data: courses.map((c) => this.sanitizeCourse(c, userId)),
+      total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: Math.ceil(total / pagination.limit),
+    };
   }
 
   async getCourseForUser(id: string, userId: string): Promise<any> {
@@ -90,7 +138,12 @@ export class CoursesService {
   }
 
   async findById(id: string): Promise<CourseDocument> {
-    const course = await this.courseModel.findById(id).exec();
+    const isObjectId =
+      Types.ObjectId.isValid(id) && String(new Types.ObjectId(id)) === id;
+    const query = isObjectId
+      ? { $or: [{ _id: id }, { urlSlug: id }] }
+      : { urlSlug: id };
+    const course = await this.courseModel.findOne(query).exec();
     if (!course) throw new NotFoundException('Kurs topilmadi');
     return course;
   }
@@ -103,8 +156,44 @@ export class CoursesService {
       image?: string;
       category?: string;
       price?: number;
+      accessType?: string;
+      urlSlug?: string;
     },
   ): Promise<CourseDocument> {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+
+    const isPremium = user.premiumStatus === 'active';
+    console.log(
+      `[DEBUG] Course creation user ${userId} premiumStatus: ${user.premiumStatus} -> isPremium=${isPremium}`,
+    );
+    const limit = isPremium ? 3 : 1;
+
+    const existingCoursesCount = await this.courseModel.countDocuments({
+      createdBy: new Types.ObjectId(userId),
+    });
+
+    if (existingCoursesCount >= limit) {
+      throw new ForbiddenException(
+        isPremium
+          ? 'Premium obunachilar maksimal 3 ta kurs yarata oladi.'
+          : 'Bepul tarifda faqat 1 ta kurs yaratish mumkin. Koproq kurs yaratish uchun Premium xarid qiling.',
+      );
+    }
+
+    // Generate urlSlug from name if not provided
+    let rawSlug =
+      dto.urlSlug ||
+      dto.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '');
+    let finalSlug = rawSlug;
+    let counter = 1;
+    while (await this.courseModel.findOne({ urlSlug: finalSlug })) {
+      finalSlug = `${rawSlug}-${counter}`;
+      counter++;
+    }
     const gradients = [
       'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
@@ -119,6 +208,7 @@ export class CoursesService {
 
     return this.courseModel.create({
       ...dto,
+      urlSlug: finalSlug,
       gradient,
       createdBy: new Types.ObjectId(userId),
     });
@@ -129,7 +219,22 @@ export class CoursesService {
     if (course.createdBy.toString() !== userId) {
       throw new ForbiddenException("Siz bu kursni o'chira olmaysiz");
     }
-    await this.courseModel.findByIdAndDelete(courseId).exec();
+
+    // Delete associated files in R2
+    for (const lesson of course.lessons as any[]) {
+      if (lesson.fileUrl) {
+        await this.r2Service.deleteFile(lesson.fileUrl);
+      }
+      if (
+        lesson.videoUrl &&
+        lesson.type === 'file' &&
+        lesson.videoUrl.startsWith('http')
+      ) {
+        await this.r2Service.deleteFile(lesson.videoUrl);
+      }
+    }
+
+    await this.courseModel.findByIdAndDelete(course._id).exec();
   }
 
   /* ---- LESSONS ---- */
@@ -137,15 +242,64 @@ export class CoursesService {
   async addLesson(
     courseId: string,
     userId: string,
-    dto: { title: string; videoUrl: string; description?: string },
+    dto: {
+      title: string;
+      videoUrl?: string;
+      description?: string;
+      type?: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileSize?: number;
+      urlSlug?: string;
+    },
   ): Promise<CourseDocument> {
     const course = await this.findById(courseId);
     if (course.createdBy.toString() !== userId) {
       throw new ForbiddenException("Faqat kurs egasi dars qo'sha oladi");
     }
+
+    const user = await this.userModel.findById(userId);
+    const isPremium = user?.premiumStatus === 'active';
+    console.log(
+      `[DEBUG] Lesson addition user ${userId} premiumStatus: ${user?.premiumStatus} -> isPremium=${isPremium}`,
+    );
+    const limit = isPremium ? 30 : 5;
+
+    if (course.lessons.length >= limit) {
+      throw new ForbiddenException(
+        isPremium
+          ? 'Premium obunachilar har bir kursda maksimal 30 ta dars yarata oladi.'
+          : "Bepul tarifda bitta kursga faqat 5 ta dars qo'shish mumkin.",
+      );
+    }
+
+    if (!isPremium && dto.type === 'file') {
+      throw new ForbiddenException(
+        'Fayl yuklash uchun Premium obuna talab qilinadi',
+      );
+    }
+
+    let rawSlug =
+      dto.urlSlug ||
+      dto.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '');
+    let finalSlug = rawSlug;
+    let counter = 1;
+    while (course.lessons.some((l) => l.urlSlug === finalSlug)) {
+      finalSlug = `${rawSlug}-${counter}`;
+      counter++;
+    }
+
     course.lessons.push({
       title: dto.title,
-      videoUrl: dto.videoUrl,
+      type: dto.type || 'video',
+      videoUrl: dto.videoUrl || '',
+      fileUrl: dto.fileUrl || '',
+      fileName: dto.fileName || '',
+      fileSize: dto.fileSize || 0,
+      urlSlug: finalSlug,
       description: dto.description || '',
       views: 0,
       addedAt: new Date(),
@@ -163,6 +317,30 @@ export class CoursesService {
     if (course.createdBy.toString() !== userId) {
       throw new ForbiddenException("Faqat kurs egasi dars o'chira oladi");
     }
+
+    const lessonObj = course.lessons.find(
+      (l: any) => l._id.toString() === lessonId,
+    ) as any;
+    if (lessonObj) {
+      if (lessonObj.fileUrl) {
+        await this.r2Service
+          .deleteFile(lessonObj.fileUrl)
+          .catch((e) =>
+            console.error(`Failed to delete fileUrl ${lessonObj.fileUrl}:`, e),
+          );
+      }
+      if (lessonObj.videoUrl && lessonObj.type === 'file') {
+        await this.r2Service
+          .deleteFile(lessonObj.videoUrl)
+          .catch((e) =>
+            console.error(
+              `Failed to delete videoUrl ${lessonObj.videoUrl}:`,
+              e,
+            ),
+          );
+      }
+    }
+
     course.lessons = course.lessons.filter(
       (l: any) => l._id.toString() !== lessonId,
     ) as any;
@@ -170,9 +348,15 @@ export class CoursesService {
   }
 
   async incrementViews(courseId: string, lessonId: string): Promise<void> {
+    const course = await this.findById(courseId);
+    const lesson = course.lessons.find(
+      (l: any) => l._id.toString() === lessonId || l.urlSlug === lessonId,
+    );
+    if (!lesson) return;
+
     await this.courseModel
       .updateOne(
-        { _id: courseId, 'lessons._id': lessonId },
+        { _id: course._id, 'lessons._id': lesson._id },
         { $inc: { 'lessons.$.views': 1 } },
       )
       .exec();
@@ -197,7 +381,16 @@ export class CoursesService {
       status: 'pending',
       joinedAt: new Date(),
     } as any);
-    return course.save();
+
+    const updatedCourse = await course.save();
+
+    // Broadcast that a new member requested to join (notify course admins/subscribers if needed)
+    this.coursesGateway.notifyCourse(courseId, 'course_enrolled', {
+      courseId,
+      user: { _id: user._id, name: user.nickname || user.username },
+    });
+
+    return updatedCourse;
   }
 
   async approveUser(
@@ -212,8 +405,25 @@ export class CoursesService {
     const member = course.members.find(
       (m: any) => m.userId.toString() === memberId,
     );
-    if (member) member.status = 'approved';
-    return course.save();
+    if (member) {
+      member.status = 'approved';
+    }
+
+    const updatedCourse = await course.save();
+
+    // Notify the approved user individually
+    this.coursesGateway.notifyUser(memberId, 'member_approved', {
+      courseId,
+      courseName: course.name,
+    });
+
+    // Notify the room broadly
+    this.coursesGateway.notifyCourse(courseId, 'member_approved_broadcast', {
+      courseId,
+      memberId,
+    });
+
+    return updatedCourse;
   }
 
   async removeUser(
@@ -222,16 +432,94 @@ export class CoursesService {
     adminId: string,
   ): Promise<CourseDocument> {
     const course = await this.findById(courseId);
-    if (course.createdBy.toString() !== adminId) {
-      throw new ForbiddenException("Faqat kurs egasi o'chira oladi");
+    if (course.createdBy.toString() !== adminId && memberId !== adminId) {
+      throw new ForbiddenException(
+        "Faqat kurs egasi o'chira oladi yoki foydalanuvchi o'zini o'zi o'chira oladi",
+      );
     }
     course.members = course.members.filter(
       (m: any) => m.userId.toString() !== memberId,
     ) as any;
-    return course.save();
+
+    const updatedCourse = await course.save();
+
+    // Notify the removed user
+    this.coursesGateway.notifyUser(memberId, 'member_rejected', {
+      courseId,
+      courseName: course.name,
+    });
+
+    // Notify the room broadly
+    this.coursesGateway.notifyCourse(courseId, 'member_rejected_broadcast', {
+      courseId,
+      memberId,
+    });
+
+    return updatedCourse;
   }
 
   /* ---- COMMENTS ---- */
+
+  async getLessonComments(
+    courseId: string,
+    lessonId: string,
+    pagination: { page: number; limit: number } = { page: 1, limit: 10 },
+  ) {
+    const course = await this.findById(courseId);
+    if (!course) throw new NotFoundException('Course not found');
+
+    const lessonIndex = course.lessons.findIndex(
+      (l: any) => l._id.toString() === lessonId || l.urlSlug === lessonId,
+    );
+
+    if (lessonIndex === -1) throw new NotFoundException('Lesson not found');
+    const lesson = course.lessons[lessonIndex] as any;
+
+    const skip = (pagination.page - 1) * pagination.limit;
+
+    // Decrypt all comments for this lesson
+    const decryptedComments = (lesson.comments || []).map((comment: any) => {
+      const decryptedComment = this.decryptText(comment);
+      return {
+        _id: decryptedComment._id,
+        userId: decryptedComment.userId,
+        userName: decryptedComment.userName,
+        userAvatar: decryptedComment.userAvatar,
+        text: decryptedComment.text,
+        createdAt: decryptedComment.createdAt,
+        replies: (decryptedComment.replies || []).map((reply: any) => {
+          const dr = this.decryptText(reply);
+          return {
+            _id: dr._id,
+            userId: dr.userId,
+            userName: dr.userName,
+            userAvatar: dr.userAvatar,
+            text: dr.text,
+            createdAt: dr.createdAt,
+          };
+        }),
+      };
+    });
+
+    // Sort newest first
+    decryptedComments.sort(
+      (a: any, b: any) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+    const paginatedComments = decryptedComments.slice(
+      skip,
+      skip + pagination.limit,
+    );
+
+    return {
+      data: paginatedComments,
+      total: decryptedComments.length,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: Math.ceil(decryptedComments.length / pagination.limit),
+    };
+  }
 
   async addComment(
     courseId: string,

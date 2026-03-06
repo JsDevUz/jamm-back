@@ -142,8 +142,14 @@ exports.Comment = Comment = __decorate([
 ], Comment);
 exports.CommentSchema = mongoose_1.SchemaFactory.createForClass(Comment);
 let Lesson = class Lesson {
+    _id;
     title;
+    type;
     videoUrl;
+    fileUrl;
+    fileName;
+    fileSize;
+    urlSlug;
     description;
     views;
     addedAt;
@@ -155,9 +161,29 @@ __decorate([
     __metadata("design:type", String)
 ], Lesson.prototype, "title", void 0);
 __decorate([
-    (0, mongoose_1.Prop)({ required: true }),
+    (0, mongoose_1.Prop)({ default: 'video', enum: ['video', 'file'] }),
+    __metadata("design:type", String)
+], Lesson.prototype, "type", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
     __metadata("design:type", String)
 ], Lesson.prototype, "videoUrl", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Lesson.prototype, "fileUrl", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Lesson.prototype, "fileName", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: 0 }),
+    __metadata("design:type", Number)
+], Lesson.prototype, "fileSize", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: () => new mongoose_2.Types.ObjectId().toString() }),
+    __metadata("design:type", String)
+], Lesson.prototype, "urlSlug", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: '' }),
     __metadata("design:type", String)
@@ -216,6 +242,8 @@ let Course = class Course {
     image;
     gradient;
     category;
+    urlSlug;
+    accessType;
     price;
     rating;
     createdBy;
@@ -243,6 +271,21 @@ __decorate([
     (0, mongoose_1.Prop)({ default: 'IT' }),
     __metadata("design:type", String)
 ], Course.prototype, "category", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({
+        required: true,
+        unique: true,
+        default: () => new mongoose_2.Types.ObjectId().toString(),
+    }),
+    __metadata("design:type", String)
+], Course.prototype, "urlSlug", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({
+        enum: ['paid', 'free_request', 'free_open'],
+        default: 'free_request',
+    }),
+    __metadata("design:type", String)
+], Course.prototype, "accessType", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: 0 }),
     __metadata("design:type", Number)

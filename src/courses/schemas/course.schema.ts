@@ -82,11 +82,28 @@ export const CommentSchema = SchemaFactory.createForClass(Comment);
 
 @Schema({ _id: true, timestamps: false })
 export class Lesson {
+  _id: Types.ObjectId;
+
   @Prop({ required: true })
   title: string;
 
-  @Prop({ required: true })
+  @Prop({ default: 'video', enum: ['video', 'file'] })
+  type: string;
+
+  @Prop({ default: '' })
   videoUrl: string;
+
+  @Prop({ default: '' })
+  fileUrl: string;
+
+  @Prop({ default: '' })
+  fileName: string;
+
+  @Prop({ default: 0 })
+  fileSize: number;
+
+  @Prop({ default: () => new Types.ObjectId().toString() })
+  urlSlug: string;
 
   @Prop({ default: '' })
   description: string;
@@ -141,6 +158,19 @@ export class Course {
 
   @Prop({ default: 'IT' })
   category: string;
+
+  @Prop({
+    required: true,
+    unique: true,
+    default: () => new Types.ObjectId().toString(),
+  })
+  urlSlug: string;
+
+  @Prop({
+    enum: ['paid', 'free_request', 'free_open'],
+    default: 'free_request',
+  })
+  accessType: string;
 
   @Prop({ default: 0 })
   price: number;

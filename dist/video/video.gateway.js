@@ -15,10 +15,36 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.VideoGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
+const jwt_1 = require("@nestjs/jwt");
+const config_1 = require("@nestjs/config");
+const premium_service_1 = require("../premium/premium.service");
 let VideoGateway = class VideoGateway {
+    jwtService;
+    configService;
+    premiumService;
     server;
     rooms = new Map();
-    handleConnection(client) {
+    constructor(jwtService, configService, premiumService) {
+        this.jwtService = jwtService;
+        this.configService = configService;
+        this.premiumService = premiumService;
+    }
+    async handleConnection(client) {
+        try {
+            const token = client.handshake?.auth?.token ||
+                client.handshake?.query?.token;
+            if (token) {
+                const secret = this.configService.get('JWT_SECRET') || 'fallback-secret';
+                const payload = await this.jwtService.verifyAsync(token, { secret });
+                client.data.user = {
+                    _id: payload.sub,
+                    email: payload.email,
+                };
+            }
+        }
+        catch (err) {
+            console.log(`[Video] auth error for ${client.id}:`, err.message);
+        }
         console.log(`[Video] connected: ${client.id}`);
     }
     handleDisconnect(client) {
@@ -43,13 +69,43 @@ let VideoGateway = class VideoGateway {
             }
         });
     }
-    handleCreateRoom(client, data) {
+    async handleCreateRoom(client, data) {
         const { roomId, displayName, isPrivate = false, title = '' } = data;
+        const userId = client.data?.user?._id;
+        if (!userId) {
+            client.emit('error', {
+                message: 'Authentication required to create a room',
+            });
+            return;
+        }
+        let activeRoomsCount = 0;
+        this.rooms.forEach((room) => {
+            if (room.creatorUserId === userId) {
+                activeRoomsCount++;
+            }
+        });
+        try {
+            const status = await this.premiumService.getPremiumStatus(userId);
+            const isPremium = status === 'active';
+            const limit = isPremium ? 3 : 1;
+            if (activeRoomsCount >= limit) {
+                client.emit('error', {
+                    message: "Siz maksimal darajadagi meetlar soniga yetdingiz. Ko'proq ochish uchun Premium obunani faollashtiring.",
+                });
+                return;
+            }
+        }
+        catch (err) {
+            console.error('[Video] Premium check error:', err);
+            client.emit('error', { message: 'Failed to check premium status' });
+            return;
+        }
         this.rooms.set(roomId, {
             peers: new Map([[client.id, displayName]]),
             isPrivate,
             title,
             creatorSocketId: client.id,
+            creatorUserId: userId,
             knockQueue: new Map(),
         });
         client.join(roomId);
@@ -206,7 +262,7 @@ __decorate([
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:returntype", Promise)
 ], VideoGateway.prototype, "handleCreateRoom", null);
 __decorate([
     (0, websockets_1.SubscribeMessage)('join-room'),
@@ -356,6 +412,9 @@ exports.VideoGateway = VideoGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
         cors: { origin: '*', methods: ['GET', 'POST'] },
         namespace: '/video',
-    })
+    }),
+    __metadata("design:paramtypes", [jwt_1.JwtService,
+        config_1.ConfigService,
+        premium_service_1.PremiumService])
 ], VideoGateway);
 //# sourceMappingURL=video.gateway.js.map

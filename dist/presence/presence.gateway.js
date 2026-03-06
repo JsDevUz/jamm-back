@@ -98,6 +98,46 @@ let PresenceGateway = PresenceGateway_1 = class PresenceGateway {
         await this.redisPresence.refreshTTL(userId);
         return { event: 'presence:pong', data: { status: 'ok' } };
     }
+    async handleCallRequest(client, data) {
+        const fromUserId = client.data.user._id;
+        const { toUserId, roomId, callType = 'video' } = data;
+        this.logger.log(`Call request from ${fromUserId} to ${toUserId} (room: ${roomId})`);
+        const sender = await this.userModel
+            .findById(fromUserId)
+            .select('nickname username avatar')
+            .lean();
+        this.server.to(`user:${toUserId}`).emit('call:incoming', {
+            fromUser: {
+                _id: fromUserId,
+                name: sender?.nickname || sender?.username || 'Unknown',
+                avatar: sender?.avatar,
+            },
+            roomId,
+            callType,
+        });
+    }
+    async handleCallAccept(client, data) {
+        const fromUserId = client.data.user._id;
+        this.server.to(`user:${data.toUserId}`).emit('call:accepted', {
+            fromUserId,
+            roomId: data.roomId,
+        });
+    }
+    async handleCallReject(client, data) {
+        const fromUserId = client.data.user._id;
+        this.server.to(`user:${data.toUserId}`).emit('call:rejected', {
+            fromUserId,
+            roomId: data.roomId,
+            reason: data.reason || 'declined',
+        });
+    }
+    async handleCallCancel(client, data) {
+        const fromUserId = client.data.user._id;
+        this.server.to(`user:${data.toUserId}`).emit('call:cancelled', {
+            fromUserId,
+            roomId: data.roomId,
+        });
+    }
 };
 exports.PresenceGateway = PresenceGateway;
 __decorate([
@@ -112,6 +152,42 @@ __decorate([
     __metadata("design:paramtypes", [socket_io_1.Socket]),
     __metadata("design:returntype", Promise)
 ], PresenceGateway.prototype, "handleHeartbeat", null);
+__decorate([
+    (0, common_1.UseGuards)(ws_jwt_guard_1.WsJwtGuard),
+    (0, websockets_1.SubscribeMessage)('call:request'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], PresenceGateway.prototype, "handleCallRequest", null);
+__decorate([
+    (0, common_1.UseGuards)(ws_jwt_guard_1.WsJwtGuard),
+    (0, websockets_1.SubscribeMessage)('call:accept'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], PresenceGateway.prototype, "handleCallAccept", null);
+__decorate([
+    (0, common_1.UseGuards)(ws_jwt_guard_1.WsJwtGuard),
+    (0, websockets_1.SubscribeMessage)('call:reject'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], PresenceGateway.prototype, "handleCallReject", null);
+__decorate([
+    (0, common_1.UseGuards)(ws_jwt_guard_1.WsJwtGuard),
+    (0, websockets_1.SubscribeMessage)('call:cancel'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], PresenceGateway.prototype, "handleCallCancel", null);
 exports.PresenceGateway = PresenceGateway = PresenceGateway_1 = __decorate([
     (0, websockets_1.WebSocketGateway)({
         namespace: '/presence',

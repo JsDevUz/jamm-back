@@ -6,4 +6,12 @@ export declare class R2Service {
     private publicDomain;
     constructor(configService: ConfigService);
     uploadFile(file: Express.Multer.File, folder?: string): Promise<string>;
+    getFileStream(key: string, range?: string): Promise<{
+        stream: any;
+        contentType: string;
+        contentLength: number;
+        contentRange?: string;
+        acceptRanges?: string;
+    }>;
+    deleteFile(key: string): Promise<boolean>;
 }

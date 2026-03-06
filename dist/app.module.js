@@ -10,6 +10,8 @@ exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const mongoose_1 = require("@nestjs/mongoose");
+const core_1 = require("@nestjs/core");
+const throttler_1 = require("@nestjs/throttler");
 const auth_module_1 = require("./auth/auth.module");
 const users_module_1 = require("./users/users.module");
 const courses_module_1 = require("./courses/courses.module");
@@ -17,6 +19,9 @@ const chats_module_1 = require("./chats/chats.module");
 const video_module_1 = require("./video/video.module");
 const presence_module_1 = require("./presence/presence.module");
 const premium_module_1 = require("./premium/premium.module");
+const meets_module_1 = require("./meets/meets.module");
+const posts_module_1 = require("./posts/posts.module");
+const arena_module_1 = require("./arena/arena.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -31,6 +36,12 @@ exports.AppModule = AppModule = __decorate([
                     uri: configService.get('MONGODB_URI'),
                 }),
             }),
+            throttler_1.ThrottlerModule.forRoot([
+                {
+                    ttl: 60000,
+                    limit: 100,
+                },
+            ]),
             auth_module_1.AuthModule,
             users_module_1.UsersModule,
             courses_module_1.CoursesModule,
@@ -38,6 +49,15 @@ exports.AppModule = AppModule = __decorate([
             video_module_1.VideoModule,
             presence_module_1.PresenceModule,
             premium_module_1.PremiumModule,
+            meets_module_1.MeetsModule,
+            posts_module_1.PostsModule,
+            arena_module_1.ArenaModule,
+        ],
+        providers: [
+            {
+                provide: core_1.APP_GUARD,
+                useClass: throttler_1.ThrottlerGuard,
+            },
         ],
     })
 ], AppModule);

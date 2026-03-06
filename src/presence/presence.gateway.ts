@@ -6,6 +6,7 @@ import {
   OnGatewayDisconnect,
   OnGatewayInit,
   ConnectedSocket,
+  MessageBody,
 } from '@nestjs/websockets';
 import { Logger, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
@@ -157,5 +158,78 @@ export class PresenceGateway
 
     await this.redisPresence.refreshTTL(userId);
     return { event: 'presence:pong', data: { status: 'ok' } };
+  }
+
+  // ─── Private Call Signaling ──────────────────────────────────────────────────
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('call:request')
+  async handleCallRequest(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { toUserId: string; roomId: string; callType?: string },
+  ) {
+    const fromUserId = client.data.user._id;
+    const { toUserId, roomId, callType = 'video' } = data;
+
+    this.logger.log(
+      `Call request from ${fromUserId} to ${toUserId} (room: ${roomId})`,
+    );
+
+    // Fetch sender info for the notification
+    const sender = await this.userModel
+      .findById(fromUserId)
+      .select('nickname username avatar')
+      .lean();
+
+    this.server.to(`user:${toUserId}`).emit('call:incoming', {
+      fromUser: {
+        _id: fromUserId,
+        name: sender?.nickname || sender?.username || 'Unknown',
+        avatar: sender?.avatar,
+      },
+      roomId,
+      callType,
+    });
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('call:accept')
+  async handleCallAccept(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { toUserId: string; roomId: string },
+  ) {
+    const fromUserId = client.data.user._id;
+    this.server.to(`user:${data.toUserId}`).emit('call:accepted', {
+      fromUserId,
+      roomId: data.roomId,
+    });
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('call:reject')
+  async handleCallReject(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { toUserId: string; roomId: string; reason?: string },
+  ) {
+    const fromUserId = client.data.user._id;
+    this.server.to(`user:${data.toUserId}`).emit('call:rejected', {
+      fromUserId,
+      roomId: data.roomId,
+      reason: data.reason || 'declined',
+    });
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('call:cancel')
+  async handleCallCancel(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { toUserId: string; roomId: string },
+  ) {
+    const fromUserId = client.data.user._id;
+    this.server.to(`user:${data.toUserId}`).emit('call:cancelled', {
+      fromUserId,
+      roomId: data.roomId,
+    });
   }
 }

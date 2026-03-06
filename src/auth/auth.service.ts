@@ -2,18 +2,22 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 import { UsersService } from '../users/users.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
+import { EmailService } from '../common/services/email.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
+    private emailService: EmailService,
   ) {}
 
   async signup(signupDto: SignupDto) {
@@ -23,30 +27,38 @@ export class AuthService {
       throw new ConflictException("Bu email allaqachon ro'yxatdan o'tgan");
     }
 
-    // Check if username already exists
-    const existingUsername = await this.usersService.findByUsername(
-      signupDto.username,
-    );
-    if (existingUsername) {
-      throw new ConflictException('Bu username allaqachon band');
-    }
+    // // Check if username already exists
+    // const existingUsername = await this.usersService.findByUsername(
+    //   signupDto.username,
+    // );
+    // if (existingUsername) {
+    //   throw new ConflictException('Bu username allaqachon band');
+    // }
 
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(signupDto.password, salt);
 
-    // Create user
+    // Generate verification token
+    const verificationToken = uuidv4();
+
+    // Create user (unverified)
     const user = await this.usersService.create({
       ...signupDto,
       password: hashedPassword,
+      isVerified: false,
+      verificationToken,
     });
 
-    // Generate JWT
-    const token = this.generateToken(user._id.toString(), user.email);
+    // Send verification email
+    await this.emailService.sendVerificationEmail(
+      user.email,
+      verificationToken,
+    );
 
     return {
-      access_token: token,
-      user: this.sanitizeUser(user),
+      message:
+        "Ro'yxatdan o'tish muvaffaqiyatli! Emailingizga tasdiqlash havolasi yuborildi.",
     };
   }
 
@@ -55,6 +67,14 @@ export class AuthService {
     const user = await this.usersService.findByEmail(loginDto.email);
     if (!user) {
       throw new UnauthorizedException("Email yoki parol noto'g'ri");
+    }
+
+    // Check if verified — only block users who explicitly have isVerified: false
+    // (existing users from before this feature have isVerified: undefined, they should not be blocked)
+    if (user.isVerified === false) {
+      throw new UnauthorizedException(
+        'Emailingiz tasdiqlanmagan. Iltimos, emailga kelgan havola orqali tasdiqlang.',
+      );
     }
 
     // Compare password
@@ -71,6 +91,28 @@ export class AuthService {
 
     return {
       access_token: token,
+      user: this.sanitizeUser(user),
+    };
+  }
+
+  async verifyEmail(token: string) {
+    const user = await this.usersService.findByVerificationToken(token);
+    if (!user) {
+      throw new NotFoundException(
+        "Tasdiqlash kodi noto'g'ri yoki allaqachon foydalanilgan",
+      );
+    }
+
+    // Mark as verified
+    user.isVerified = true;
+    (user as any).verificationToken = null;
+    await (user as any).save();
+
+    // Generate JWT for auto-login
+    const jwt = this.generateToken(user._id.toString(), user.email);
+
+    return {
+      access_token: jwt,
       user: this.sanitizeUser(user),
     };
   }

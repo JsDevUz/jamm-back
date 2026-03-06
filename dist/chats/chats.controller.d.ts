@@ -2,7 +2,31 @@ import { ChatsService } from './chats.service';
 export declare class ChatsController {
     private readonly chatsService;
     constructor(chatsService: ChatsService);
-    getUserChats(req: any): Promise<any[]>;
+    getUserChats(req: any, page?: number, limit?: number): Promise<{
+        data: {
+            _id: any;
+            jammId: any;
+            name: any;
+            description: any;
+            avatar: any;
+            isGroup: any;
+            privateurl: any;
+            members: any;
+            createdBy: any;
+            admins: any;
+            isSavedMessages: any;
+            urlSlug: any;
+            lastMessage: string | undefined;
+            lastMessageAt: any;
+            updatedAt: any;
+            createdAt: any;
+            unreadCount: number;
+        }[];
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+    }>;
     createChat(req: any, dto: {
         isGroup: boolean;
         name?: string;
@@ -23,7 +47,7 @@ export declare class ChatsController {
         jammId: number;
     }>;
     getChat(req: any, id: string): Promise<import("./schemas/chat.schema").ChatDocument>;
-    getChatMessages(req: any, id: string): Promise<import("./schemas/message.schema").MessageDocument[]>;
+    getChatMessages(req: any, id: string, page?: number, limit?: number): Promise<any>;
     sendMessage(req: any, id: string, body: {
         content: string;
         replayToId?: string;
@@ -68,4 +92,10 @@ export declare class ChatsController {
     respondToJoinRequest(req: any, id: string, requestId: string, body: {
         approved: boolean;
     }): Promise<void>;
+    leaveChat(req: any, id: string): Promise<{
+        success: boolean;
+    }>;
+    deleteChat(req: any, id: string): Promise<{
+        success: boolean;
+    }>;
 }

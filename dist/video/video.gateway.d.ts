@@ -1,16 +1,23 @@
 import { OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { PremiumService } from '../premium/premium.service';
 export declare class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
+    private readonly jwtService;
+    private readonly configService;
+    private readonly premiumService;
     server: Server;
     private rooms;
-    handleConnection(client: Socket): void;
+    constructor(jwtService: JwtService, configService: ConfigService, premiumService: PremiumService);
+    handleConnection(client: Socket): Promise<void>;
     handleDisconnect(client: Socket): void;
     handleCreateRoom(client: Socket, data: {
         roomId: string;
         displayName: string;
         isPrivate?: boolean;
         title?: string;
-    }): void;
+    }): Promise<void>;
     handleJoinRoom(client: Socket, data: {
         roomId: string;
         displayName: string;

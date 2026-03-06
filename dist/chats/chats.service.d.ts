@@ -23,7 +23,34 @@ export declare class ChatsService implements OnModuleInit {
     private backfillJammIds;
     private getEncryptionStrategy;
     private decryptMessage;
-    getUserChats(userId: string): Promise<any[]>;
+    getUserChats(userId: string, pagination?: {
+        page: number;
+        limit: number;
+    }): Promise<{
+        data: {
+            _id: any;
+            jammId: any;
+            name: any;
+            description: any;
+            avatar: any;
+            isGroup: any;
+            privateurl: any;
+            members: any;
+            createdBy: any;
+            admins: any;
+            isSavedMessages: any;
+            urlSlug: any;
+            lastMessage: string | undefined;
+            lastMessageAt: any;
+            updatedAt: any;
+            createdAt: any;
+            unreadCount: number;
+        }[];
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+    }>;
     createChat(userId: string, dto: {
         isGroup: boolean;
         name?: string;
@@ -58,7 +85,10 @@ export declare class ChatsService implements OnModuleInit {
         jammId: number;
     }>;
     joinGroupByLink(slugOrId: string, userId: string): Promise<ChatDocument>;
-    getChatMessages(chatId: string, userId: string): Promise<MessageDocument[]>;
+    getChatMessages(chatId: string, userId: string, pagination: {
+        page: number;
+        limit: number;
+    }): Promise<any>;
     sendMessage(chatId: string, userId: string, content: string, replayToId?: string): Promise<MessageDocument>;
     editMessage(messageId: string, userId: string, newContent: string): Promise<MessageDocument>;
     deleteMessage(messageId: string, userId: string): Promise<MessageDocument>;
@@ -80,5 +110,11 @@ export declare class ChatsService implements OnModuleInit {
     getJoinRequestStatus(chatId: string, requestId: string): Promise<{
         status: 'pending' | 'approved' | 'rejected';
         roomId?: string;
+    }>;
+    deleteChat(chatId: string, userId: string): Promise<{
+        success: boolean;
+    }>;
+    leaveChat(chatId: string, userId: string): Promise<{
+        success: boolean;
     }>;
 }

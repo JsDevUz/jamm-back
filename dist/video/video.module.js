@@ -8,12 +8,26 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VideoModule = void 0;
 const common_1 = require("@nestjs/common");
+const config_1 = require("@nestjs/config");
+const jwt_1 = require("@nestjs/jwt");
 const video_gateway_1 = require("./video.gateway");
+const premium_module_1 = require("../premium/premium.module");
 let VideoModule = class VideoModule {
 };
 exports.VideoModule = VideoModule;
 exports.VideoModule = VideoModule = __decorate([
     (0, common_1.Module)({
+        imports: [
+            config_1.ConfigModule,
+            jwt_1.JwtModule.registerAsync({
+                imports: [config_1.ConfigModule],
+                inject: [config_1.ConfigService],
+                useFactory: (configService) => ({
+                    secret: configService.get('JWT_SECRET') || 'fallback-secret',
+                }),
+            }),
+            premium_module_1.PremiumModule,
+        ],
         providers: [video_gateway_1.VideoGateway],
     })
 ], VideoModule);

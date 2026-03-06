@@ -135,13 +135,26 @@ export class ChatsService implements OnModuleInit {
     }
   }
 
-  async getUserChats(userId: string): Promise<any[]> {
-    const chats = await this.chatModel
-      .find({ members: new Types.ObjectId(userId) })
-      .populate('members', 'username nickname avatar')
-      .sort({ updatedAt: -1 })
-      .lean()
-      .exec();
+  async getUserChats(
+    userId: string,
+    pagination: { page: number; limit: number } = { page: 1, limit: 15 },
+  ) {
+    const skip = (pagination.page - 1) * pagination.limit;
+
+    const [chats, total] = await Promise.all([
+      this.chatModel
+        .find({ members: new Types.ObjectId(userId) })
+        .populate(
+          'members',
+          'username nickname avatar premiumStatus bio jammId',
+        )
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(pagination.limit)
+        .lean()
+        .exec(),
+      this.chatModel.countDocuments({ members: new Types.ObjectId(userId) }),
+    ]);
 
     const chatsWithUnread = await Promise.all(
       chats.map(async (chat) => {
@@ -174,15 +187,41 @@ export class ChatsService implements OnModuleInit {
           }
         }
 
+        const chatObj = (chat as any).toObject
+          ? (chat as any).toObject()
+          : (chat as any);
+        console.log(chatObj, 'lllll');
+
         return {
-          ...chat,
+          _id: chatObj._id,
+          jammId: chatObj.jammId,
+          name: chatObj.name,
+          description: chatObj.description,
+          avatar: chatObj.avatar,
+          isGroup: chatObj.isGroup,
+          privateurl: chatObj.privateurl,
+          members: chatObj.members,
+          createdBy: chatObj.createdBy,
+          admins: chatObj.admins,
+          isSavedMessages: chatObj.isSavedMessages,
+          urlSlug: chatObj.urlSlug,
           lastMessage: decryptedLastMessage,
+          lastMessageAt: chatObj.lastMessageAt,
+          updatedAt: chatObj.updatedAt,
+          createdAt: chatObj.createdAt,
           unreadCount,
         };
       }),
     );
+    console.log(chatsWithUnread);
 
-    return chatsWithUnread;
+    return {
+      data: chatsWithUnread,
+      total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: Math.ceil(total / pagination.limit),
+    };
   }
 
   async createChat(
@@ -207,11 +246,17 @@ export class ChatsService implements OnModuleInit {
       });
 
       const premiumStatus = await this.premiumService.getPremiumStatus(userId);
-      const limit = premiumStatus === 'active' ? 10 : 2;
+      const limit = premiumStatus === 'active' ? 3 : 1;
 
       if (groupCount >= limit) {
         throw new ForbiddenException(
           `Siz maksimal darajadagi guruhlar soniga yetdingiz (${limit}). Ko'proq guruh ochish uchun Premium obunani faollashtiring.`,
+        );
+      }
+
+      if (members.length > 40) {
+        throw new BadRequestException(
+          "Guruh a'zolari soni 40 dan oshmasligi kerak",
         );
       }
     }
@@ -220,7 +265,10 @@ export class ChatsService implements OnModuleInit {
       const existing = await this.chatModel
         .findOne({
           isGroup: false,
-          members: { $all: members, $size: 2 },
+          $or: [
+            { members: [members[0], members[1]] },
+            { members: [members[1], members[0]] },
+          ],
         })
         .exec();
 
@@ -240,11 +288,19 @@ export class ChatsService implements OnModuleInit {
   }
 
   hasPermission(chat: any, userId: string, permission: string): boolean {
+    console.log(chat, chat.createdBy?.toString(), userId, permission);
     if (chat.createdBy?.toString() === userId) return true;
     if (!chat.admins) return false;
-    const admin = chat.admins.find((a: any) => a.userId.toString() === userId);
+    const admin = chat.admins.find((a: any) => {
+      const aid = a.userId?._id || a.userId || a.id;
+      return aid?.toString() === userId;
+    });
     if (!admin) return false;
-    return admin.permissions.includes(permission);
+    if (permission === 'any') return true;
+    return (
+      admin.permissions.includes(permission) ||
+      admin.permissions.includes('all')
+    );
   }
 
   async editChat(
@@ -266,119 +322,130 @@ export class ChatsService implements OnModuleInit {
       );
     }
 
+    const canEditInfo = this.hasPermission(chat, userId, 'edit_group_info');
+    const canAddAdmins = this.hasPermission(chat, userId, 'add_admins');
+    const canAddMembers = this.hasPermission(chat, userId, 'add_members');
+    const canRemoveMembers = this.hasPermission(chat, userId, 'remove_members');
+    const isOwnerOrAdmin = this.hasPermission(chat, userId, 'any');
+
     const isInfoEdit =
       dto.name !== undefined ||
       dto.description !== undefined ||
       dto.avatar !== undefined;
-    if (isInfoEdit && !this.hasPermission(chat, userId, 'edit_group_info')) {
+
+    if (isInfoEdit && !canEditInfo) {
       throw new ForbiddenException(
         "Sizda guruh ma'lumotlarini tahrirlash huquqi yo'q",
       );
     }
 
-    // 0. Track old members for broadcasting later
+    /** OLD MEMBERS */
     const oldMemberIds = chat.members.map((m: any) =>
-      m._id ? m._id.toString() : m.toString(),
+      (m._id ? m._id : m).toString(),
     );
 
-    // 1. Manage members and admins state
     let currentMemberIds = new Set<string>(oldMemberIds);
 
-    // Update admins if provided
+    /** ADMIN UPDATE */
     if (dto.admins !== undefined) {
-      if (!this.hasPermission(chat, userId, 'add_admins')) {
+      if (!canAddAdmins) {
         throw new ForbiddenException("Sizda adminlarni boshqarish huquqi yo'q");
       }
-      chat.admins = dto.admins.map((a) => ({
-        userId: new Types.ObjectId(a.userId),
-        permissions: a.permissions,
-      })) as any;
 
-      // Ensure all current admins are in the members set
-      dto.admins.forEach((a) => currentMemberIds.add(a.userId));
+      chat.set(
+        'admins',
+        dto.admins.map((a) => ({
+          userId: new Types.ObjectId(a.userId),
+          permissions: a.permissions,
+        })),
+      );
+
+      dto.admins.forEach((a) => {
+        currentMemberIds.add(a.userId.toString());
+      });
     }
 
-    // Update members explicitly if provided
+    /** MEMBERS UPDATE */
     if (dto.members !== undefined) {
-      const newMemberIds = dto.members;
+      const newMemberIds = dto.members.map((id) => id.toString());
 
       const added = newMemberIds.filter((id) => !currentMemberIds.has(id));
-      if (
-        added.length > 0 &&
-        !this.hasPermission(chat, userId, 'add_members')
-      ) {
+
+      if (added.length > 0 && !canAddMembers) {
         throw new ForbiddenException("Sizda a'zo qo'shish huquqi yo'q");
       }
 
       const removed = Array.from(currentMemberIds).filter(
         (id) => !newMemberIds.includes(id),
       );
+
       if (removed.length > 0) {
         const onlySelfRemoved = removed.length === 1 && removed[0] === userId;
-        if (
-          !onlySelfRemoved &&
-          !this.hasPermission(chat, userId, 'remove_members')
-        ) {
+
+        if (!onlySelfRemoved && !canRemoveMembers) {
           throw new ForbiddenException("Sizda a'zo o'chirish huquqi yo'q");
         }
       }
 
-      // Re-apply members list
       currentMemberIds = new Set(newMemberIds);
 
-      // Re-ensure current admins stay in members even if not in dto.members (sync safety)
+      /** admins member bo'lib qoladi */
       if (chat.admins) {
-        chat.admins.forEach((a: any) =>
-          currentMemberIds.add(String(a.userId || a.id)),
-        );
+        chat.admins.forEach((a: any) => {
+          const aid = (a.userId?._id || a.userId).toString();
+          currentMemberIds.add(aid);
+        });
       }
     }
 
-    // Ensure the editor (if they were already a member) is not removed accidentally
-    // Unless they explicitly tried to remove themselves (handled above)
-    if (!currentMemberIds.has(userId)) {
-      // If the editor is the owner, they must be in members
-      if (chat.createdBy?.toString() === userId) {
-        currentMemberIds.add(userId);
-      }
+    /** EDITOR O'ZINI YO'QOTIB QO'YMASIN */
+    if (!currentMemberIds.has(userId) && isOwnerOrAdmin) {
+      currentMemberIds.add(userId);
     }
 
-    chat.members = Array.from(currentMemberIds).map(
-      (id) => new Types.ObjectId(id),
-    ) as any;
+    if (currentMemberIds.size > 40) {
+      throw new BadRequestException(
+        "Guruh a'zolari soni 40 dan oshmasligi kerak",
+      );
+    }
 
+    /** MEMBERS SAVE */
+    chat.set(
+      'members',
+      Array.from(currentMemberIds).map((id) => new Types.ObjectId(id)),
+    );
+
+    chat.markModified('members');
+    chat.markModified('admins');
+
+    /** GROUP INFO UPDATE */
     if (dto.name !== undefined) chat.name = dto.name;
     if (dto.description !== undefined) chat.description = dto.description;
     if (dto.avatar !== undefined) chat.avatar = dto.avatar;
 
-    await chat.save();
-    // Use a clean refetch to avoid population caching issues
-    const updated = await this.getChat(chatId, userId);
-    const updatedMembers = updated.members;
-    const updatedAdmins = updated.admins;
-    const updatedCreatedBy = updated.createdBy;
+    const updated = await chat.save();
 
-    // Broadcast chat update to members
-    const rooms = new Set([`chat_${chatId}`]);
-    if (oldMemberIds.length > 0) {
-      oldMemberIds.forEach((id) => rooms.add(`user_${id}`));
-    }
-    if (chat.members) {
-      chat.members.forEach((m: any) =>
-        rooms.add(`user_${m._id ? m._id.toString() : m.toString()}`),
-      );
-    }
-    this.chatsGateway.server.to(Array.from(rooms)).emit('chat_updated', {
-      chatId,
-      name: chat.name,
-      description: chat.description,
-      avatar: chat.avatar,
-      members: updatedMembers,
-      createdBy: updatedCreatedBy,
-      admins: updatedAdmins,
+    /** SOCKET BROADCAST */
+    const rooms = new Set<string>([`chat_${chatId}`]);
+
+    oldMemberIds.forEach((id) => rooms.add(`user_${id}`));
+
+    updated.members.forEach((m: any) => {
+      const id = (m._id ? m._id : m).toString();
+      rooms.add(`user_${id}`);
     });
 
-    return updated as any;
+    this.chatsGateway.server.to(Array.from(rooms)).emit('chat_updated', {
+      chatId,
+      name: updated.name,
+      description: updated.description,
+      avatar: updated.avatar,
+      members: updated.members,
+      createdBy: updated.createdBy,
+      admins: updated.admins,
+    });
+
+    return updated;
   }
 
   async updateAvatar(
@@ -413,7 +480,7 @@ export class ChatsService implements OnModuleInit {
         _id: chatId,
         members: new Types.ObjectId(userId),
       })
-      .populate('members', 'username nickname avatar')
+      .populate('members', 'username nickname avatar premiumStatus')
       .exec();
 
     if (!chat) throw new NotFoundException("Chat topilmadi yoki huquq yo'q");
@@ -540,21 +607,58 @@ export class ChatsService implements OnModuleInit {
   async getChatMessages(
     chatId: string,
     userId: string,
-  ): Promise<MessageDocument[]> {
+    pagination: { page: number; limit: number },
+  ): Promise<any> {
     const chat = await this.getChat(chatId, userId);
     const strategy = this.getEncryptionStrategy(chat);
 
-    const messages = await this.messageModel
-      .find({ chatId: new Types.ObjectId(chatId) })
-      .populate('senderId', 'username nickname avatar')
-      .populate({
-        path: 'replayTo',
-        populate: { path: 'senderId', select: 'username nickname avatar' },
-      })
-      .sort({ createdAt: 1 })
-      .exec();
+    const { page, limit } = pagination;
+    const skip = (page - 1) * limit;
 
-    return messages.map((m) => this.decryptMessage(m.toObject(), strategy));
+    const [messagesDesc, total] = await Promise.all([
+      this.messageModel
+        .find({ chatId: new Types.ObjectId(chatId) })
+        .populate('senderId', 'username nickname avatar premiumStatus')
+        .populate({
+          path: 'replayTo',
+          populate: {
+            path: 'senderId',
+            select: 'username nickname avatar premiumStatus',
+          },
+        })
+        .sort({ createdAt: -1 }) // newest first to skip properly
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.messageModel.countDocuments({ chatId: new Types.ObjectId(chatId) }),
+    ]);
+
+    // Reverse the slice back to chronological order (oldest -> newest) for the UI
+    const messages = messagesDesc.reverse();
+
+    const data = messages.map((m) => {
+      const decrypted = this.decryptMessage(m.toObject(), strategy);
+      return {
+        _id: decrypted._id,
+        chatId: decrypted.chatId,
+        senderId: decrypted.senderId,
+        content: decrypted.content,
+        isEdited: decrypted.isEdited,
+        isDeleted: decrypted.isDeleted,
+        readBy: decrypted.readBy,
+        replayTo: decrypted.replayTo,
+        createdAt: decrypted.createdAt,
+        updatedAt: decrypted.updatedAt,
+      } as any as MessageDocument;
+    });
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async sendMessage(
@@ -598,7 +702,10 @@ export class ChatsService implements OnModuleInit {
       { path: 'senderId', select: 'username nickname avatar' },
       {
         path: 'replayTo',
-        populate: { path: 'senderId', select: 'username nickname avatar' },
+        populate: {
+          path: 'senderId',
+          select: 'username nickname avatar premiumStatus',
+        },
       },
     ]);
 
@@ -656,7 +763,10 @@ export class ChatsService implements OnModuleInit {
       { path: 'senderId', select: 'username nickname avatar' },
       {
         path: 'replayTo',
-        populate: { path: 'senderId', select: 'username nickname avatar' },
+        populate: {
+          path: 'senderId',
+          select: 'username nickname avatar premiumStatus',
+        },
       },
     ]);
 
@@ -703,7 +813,10 @@ export class ChatsService implements OnModuleInit {
       { path: 'senderId', select: 'username nickname avatar' },
       {
         path: 'replayTo',
-        populate: { path: 'senderId', select: 'username nickname avatar' },
+        populate: {
+          path: 'senderId',
+          select: 'username nickname avatar premiumStatus',
+        },
       },
     ]);
 
@@ -893,5 +1006,91 @@ export class ChatsService implements OnModuleInit {
       status: request.status,
       roomId: request.status === 'approved' ? chat.videoCallRoomId : undefined,
     };
+  }
+
+  async deleteChat(chatId: string, userId: string) {
+    const chat = await this.chatModel.findById(chatId).exec();
+    if (!chat) throw new NotFoundException('Suhbat topilmadi');
+
+    // Check if user is a member
+    const isMember = chat.members.some((m: any) => m.toString() === userId);
+    if (!isMember) {
+      throw new ForbiddenException(
+        "Sizda ushbu suhbatni o'chirish huquqi yo'q",
+      );
+    }
+
+    // For groups, check if user is the creator (owner)
+    if (chat.isGroup && chat.createdBy?.toString() !== userId) {
+      throw new ForbiddenException(
+        "Faqat guruh yaratuvchisi guruhni o'chira oladi",
+      );
+    }
+
+    const memberIds = chat.members.map((m: any) => m.toString());
+
+    // Delete all messages
+    await this.messageModel
+      .deleteMany({ chatId: new Types.ObjectId(chatId) })
+      .exec();
+
+    // Delete the chat itself
+    await this.chatModel.findByIdAndDelete(chatId).exec();
+
+    // Notify all members via socket
+    memberIds.forEach((mId) => {
+      this.chatsGateway.server
+        .to(`user_${mId}`)
+        .emit('chat_deleted', { chatId });
+    });
+
+    return { success: true };
+  }
+
+  async leaveChat(chatId: string, userId: string) {
+    const chat = await this.chatModel.findById(chatId).exec();
+    if (!chat) throw new NotFoundException('Suhbat topilmadi');
+
+    if (!chat.isGroup) {
+      throw new ForbiddenException('Faqat guruhdan chiqish mumkin');
+    }
+
+    // Check if user is a member
+    const isMember = chat.members.some((m: any) => m.toString() === userId);
+    if (!isMember) {
+      throw new ForbiddenException('Siz ushbu guruh a’zosi emassiz');
+    }
+
+    // Check if user is the creator (owner)
+    if (chat.createdBy?.toString() === userId) {
+      throw new ForbiddenException(
+        'Guruh yaratuvchisi guruhni tark eta olmaydi, faqat o’chirishi mumkin',
+      );
+    }
+
+    // Remove from members and admins
+    chat.members = chat.members.filter((m: any) => m.toString() !== userId);
+    chat.admins = chat.admins.filter(
+      (a: any) => a.userId.toString() !== userId,
+    );
+
+    await chat.save();
+
+    // Notify the user who left that the chat is "deleted" for them
+    this.chatsGateway.server
+      .to(`user_${userId}`)
+      .emit('chat_deleted', { chatId });
+
+    // Notify remaining members that the chat has changed
+    const remainingMembers = chat.members.map((m: any) => m.toString());
+    remainingMembers.forEach((mId) => {
+      this.chatsGateway.server.to(`user_${mId}`).emit('chat_updated', {
+        _id: chat._id,
+        members: chat.members,
+        admins: chat.admins,
+      });
+    });
+
+    return { success: true };
   }
 }

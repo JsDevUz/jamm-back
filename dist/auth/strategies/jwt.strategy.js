@@ -19,7 +19,10 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
     usersService;
     constructor(configService, usersService) {
         super({
-            jwtFromRequest: passport_jwt_1.ExtractJwt.fromAuthHeaderAsBearerToken(),
+            jwtFromRequest: passport_jwt_1.ExtractJwt.fromExtractors([
+                passport_jwt_1.ExtractJwt.fromAuthHeaderAsBearerToken(),
+                passport_jwt_1.ExtractJwt.fromUrlQueryParameter('token'),
+            ]),
             ignoreExpiration: false,
             secretOrKey: configService.get('JWT_SECRET') || 'fallback-secret',
         });

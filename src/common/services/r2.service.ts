@@ -1,6 +1,11 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -59,6 +64,78 @@ export class R2Service {
       throw new InternalServerErrorException(
         'Faylni yuklashda xatolik yuz berdi',
       );
+    }
+  }
+
+  async getFileStream(
+    key: string,
+    range?: string,
+  ): Promise<{
+    stream: any;
+    contentType: string;
+    contentLength: number;
+    contentRange?: string;
+    acceptRanges?: string;
+  }> {
+    try {
+      // Remove public domain prefix if key includes it
+      let cleanKey = key;
+      if (this.publicDomain && key.startsWith(this.publicDomain)) {
+        cleanKey = key.replace(`${this.publicDomain}/`, '');
+      } else if (key.startsWith('http')) {
+        const parts = key.split('/');
+        cleanKey = parts.slice(3).join('/'); // rough extraction
+      }
+
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: cleanKey,
+        Range: range || undefined,
+      });
+
+      const response = await this.s3Client.send(command);
+
+      return {
+        stream: response.Body,
+        contentType: response.ContentType || 'application/octet-stream',
+        contentLength: response.ContentLength || 0,
+        contentRange: response.ContentRange,
+        acceptRanges: response.AcceptRanges,
+      };
+    } catch (error) {
+      console.error('R2 GetStream Error:', error);
+      throw new InternalServerErrorException(
+        "Faylni o'qishda xatolik yuz berdi",
+      );
+    }
+  }
+
+  async deleteFile(key: string): Promise<boolean> {
+    try {
+      if (!key) return false;
+
+      // Extract raw key if a URL is provided
+      let cleanKey = key;
+      if (this.publicDomain && key.includes(this.publicDomain)) {
+        cleanKey = key.split(`${this.publicDomain}/`)[1];
+      } else if (key.startsWith('http')) {
+        const parts = key.split('/');
+        cleanKey = parts.slice(3).join('/');
+      }
+
+      if (!cleanKey) return false;
+
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: cleanKey,
+      });
+
+      await this.s3Client.send(command);
+      return true;
+    } catch (error) {
+      console.error('R2 Delete Error:', error);
+      // We don't throw error here to avoid blocking course/doc deletion if file is already gone
+      return false;
     }
   }
 }

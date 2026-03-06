@@ -13,6 +13,7 @@ const users_service_1 = require("./users.service");
 const users_controller_1 = require("./users.controller");
 const user_schema_1 = require("./schemas/user.schema");
 const r2_service_1 = require("../common/services/r2.service");
+const chats_module_1 = require("../chats/chats.module");
 let UsersModule = class UsersModule {
 };
 exports.UsersModule = UsersModule;
@@ -20,6 +21,7 @@ exports.UsersModule = UsersModule = __decorate([
     (0, common_1.Module)({
         imports: [
             mongoose_1.MongooseModule.forFeature([{ name: user_schema_1.User.name, schema: user_schema_1.UserSchema }]),
+            (0, common_1.forwardRef)(() => chats_module_1.ChatsModule),
         ],
         providers: [users_service_1.UsersService, r2_service_1.R2Service],
         controllers: [users_controller_1.UsersController],

@@ -274,82 +274,142 @@ export declare const CommentSchema: import("mongoose").Schema<Comment, import("m
     }> | undefined;
 }, Comment>;
 export declare class Lesson {
+    _id: Types.ObjectId;
     title: string;
+    type: string;
     videoUrl: string;
+    fileUrl: string;
+    fileName: string;
+    fileSize: number;
+    urlSlug: string;
     description: string;
     views: number;
     addedAt: Date;
     comments: Comment[];
 }
-export declare const LessonSchema: import("mongoose").Schema<Lesson, import("mongoose").Model<Lesson, any, any, any, (Document<unknown, any, Lesson, any, import("mongoose").DefaultSchemaOptions> & Lesson & {
+export declare const LessonSchema: import("mongoose").Schema<Lesson, import("mongoose").Model<Lesson, any, any, any, (Document<unknown, any, Lesson, any, import("mongoose").DefaultSchemaOptions> & Lesson & Required<{
     _id: Types.ObjectId;
-} & {
+}> & {
     __v: number;
 } & {
     id: string;
-}) | (Document<unknown, any, Lesson, any, import("mongoose").DefaultSchemaOptions> & Lesson & {
+}) | (Document<unknown, any, Lesson, any, import("mongoose").DefaultSchemaOptions> & Lesson & Required<{
     _id: Types.ObjectId;
-} & {
+}> & {
     __v: number;
 }), any, Lesson>, {}, {}, {}, {}, import("mongoose").DefaultSchemaOptions, Lesson, Document<unknown, {}, Lesson, {
     id: string;
-}, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+}, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
     _id: Types.ObjectId;
-} & {
+}> & {
     __v: number;
 }, "id"> & {
     id: string;
 }, {
+    _id?: import("mongoose").SchemaDefinitionProperty<Types.ObjectId, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
     title?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
         id: string;
-    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
-    } & {
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    type?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
         __v: number;
     }, "id"> & {
         id: string;
     }> | undefined;
     videoUrl?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
         id: string;
-    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
-    } & {
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    fileUrl?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    fileName?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    fileSize?: import("mongoose").SchemaDefinitionProperty<number, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    urlSlug?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
         __v: number;
     }, "id"> & {
         id: string;
     }> | undefined;
     description?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
         id: string;
-    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
-    } & {
+    }> & {
         __v: number;
     }, "id"> & {
         id: string;
     }> | undefined;
     views?: import("mongoose").SchemaDefinitionProperty<number, Lesson, Document<unknown, {}, Lesson, {
         id: string;
-    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
-    } & {
+    }> & {
         __v: number;
     }, "id"> & {
         id: string;
     }> | undefined;
     addedAt?: import("mongoose").SchemaDefinitionProperty<Date, Lesson, Document<unknown, {}, Lesson, {
         id: string;
-    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
-    } & {
+    }> & {
         __v: number;
     }, "id"> & {
         id: string;
     }> | undefined;
     comments?: import("mongoose").SchemaDefinitionProperty<Comment[], Lesson, Document<unknown, {}, Lesson, {
         id: string;
-    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & {
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
-    } & {
+    }> & {
         __v: number;
     }, "id"> & {
         id: string;
@@ -434,6 +494,8 @@ export declare class Course {
     image: string;
     gradient: string;
     category: string;
+    urlSlug: string;
+    accessType: string;
     price: number;
     rating: number;
     createdBy: Types.ObjectId;
@@ -496,6 +558,24 @@ export declare const CourseSchema: import("mongoose").Schema<Course, import("mon
         id: string;
     }> | undefined;
     category?: import("mongoose").SchemaDefinitionProperty<string, Course, Document<unknown, {}, Course, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Course & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    urlSlug?: import("mongoose").SchemaDefinitionProperty<string, Course, Document<unknown, {}, Course, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Course & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    accessType?: import("mongoose").SchemaDefinitionProperty<string, Course, Document<unknown, {}, Course, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Course & {
         _id: Types.ObjectId;
