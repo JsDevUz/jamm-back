@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { Readable } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -33,6 +34,32 @@ export class R2Service {
         secretAccessKey,
       },
     });
+  }
+
+  private extractObjectKey(key: string): string {
+    if (!key) return '';
+
+    if (this.publicDomain && key.includes(this.publicDomain)) {
+      return key.split(`${this.publicDomain}/`)[1] || '';
+    }
+
+    if (key.startsWith('http')) {
+      try {
+        const url = new URL(key);
+        return url.pathname.replace(/^\/+/, '');
+      } catch {
+        return '';
+      }
+    }
+
+    return key;
+  }
+
+  isManagedFile(key: string): boolean {
+    const cleanKey = this.extractObjectKey(key);
+    if (!cleanKey) return false;
+    if (!key.startsWith('http')) return true;
+    return Boolean(this.publicDomain && key.startsWith(this.publicDomain));
   }
 
   async uploadFile(
@@ -67,6 +94,34 @@ export class R2Service {
     }
   }
 
+  async uploadBuffer(
+    body: Buffer | string,
+    key: string,
+    contentType: string = 'application/octet-stream',
+  ): Promise<string> {
+    try {
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      });
+
+      await this.s3Client.send(command);
+
+      if (this.publicDomain) {
+        return `${this.publicDomain}/${key}`;
+      }
+
+      return key;
+    } catch (error) {
+      console.error('R2 Upload Buffer Error:', error);
+      throw new InternalServerErrorException(
+        'Faylni yuklashda xatolik yuz berdi',
+      );
+    }
+  }
+
   async getFileStream(
     key: string,
     range?: string,
@@ -79,13 +134,7 @@ export class R2Service {
   }> {
     try {
       // Remove public domain prefix if key includes it
-      let cleanKey = key;
-      if (this.publicDomain && key.startsWith(this.publicDomain)) {
-        cleanKey = key.replace(`${this.publicDomain}/`, '');
-      } else if (key.startsWith('http')) {
-        const parts = key.split('/');
-        cleanKey = parts.slice(3).join('/'); // rough extraction
-      }
+      const cleanKey = this.extractObjectKey(key);
 
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
@@ -110,18 +159,36 @@ export class R2Service {
     }
   }
 
+  async getFileText(key: string): Promise<string> {
+    const { stream } = await this.getFileStream(key);
+
+    if (stream?.transformToString) {
+      return stream.transformToString();
+    }
+
+    if (stream instanceof Readable) {
+      const chunks: Buffer[] = [];
+
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+
+      return Buffer.concat(chunks).toString('utf-8');
+    }
+
+    if (Buffer.isBuffer(stream)) {
+      return stream.toString('utf-8');
+    }
+
+    return String(stream || '');
+  }
+
   async deleteFile(key: string): Promise<boolean> {
     try {
       if (!key) return false;
 
       // Extract raw key if a URL is provided
-      let cleanKey = key;
-      if (this.publicDomain && key.includes(this.publicDomain)) {
-        cleanKey = key.split(`${this.publicDomain}/`)[1];
-      } else if (key.startsWith('http')) {
-        const parts = key.split('/');
-        cleanKey = parts.slice(3).join('/');
-      }
+      const cleanKey = this.extractObjectKey(key);
 
       if (!cleanKey) return false;
 

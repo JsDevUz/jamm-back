@@ -85,6 +85,9 @@ let AuthService = class AuthService {
         if (user.isVerified === false) {
             throw new common_1.UnauthorizedException('Emailingiz tasdiqlanmagan. Iltimos, emailga kelgan havola orqali tasdiqlang.');
         }
+        if (user.isBlocked) {
+            throw new common_1.HttpException("Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.", common_1.HttpStatus.LOCKED);
+        }
         const isPasswordValid = await bcrypt.compare(loginDto.password, user.password);
         if (!isPasswordValid) {
             throw new common_1.UnauthorizedException("Email yoki parol noto'g'ri");
@@ -99,6 +102,9 @@ let AuthService = class AuthService {
         const user = await this.usersService.findByVerificationToken(token);
         if (!user) {
             throw new common_1.NotFoundException("Tasdiqlash kodi noto'g'ri yoki allaqachon foydalanilgan");
+        }
+        if (user.isBlocked) {
+            throw new common_1.HttpException("Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.", common_1.HttpStatus.LOCKED);
         }
         user.isVerified = true;
         user.verificationToken = null;

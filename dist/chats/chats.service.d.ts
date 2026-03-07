@@ -23,6 +23,7 @@ export declare class ChatsService implements OnModuleInit {
     private backfillJammIds;
     private getEncryptionStrategy;
     private decryptMessage;
+    private ensureUsersCanJoinMoreGroups;
     getUserChats(userId: string, pagination?: {
         page: number;
         limit: number;

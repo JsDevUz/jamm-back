@@ -13,6 +13,7 @@ exports.R2Service = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const client_s3_1 = require("@aws-sdk/client-s3");
+const stream_1 = require("stream");
 const uuid_1 = require("uuid");
 let R2Service = class R2Service {
     configService;
@@ -36,6 +37,31 @@ let R2Service = class R2Service {
             },
         });
     }
+    extractObjectKey(key) {
+        if (!key)
+            return '';
+        if (this.publicDomain && key.includes(this.publicDomain)) {
+            return key.split(`${this.publicDomain}/`)[1] || '';
+        }
+        if (key.startsWith('http')) {
+            try {
+                const url = new URL(key);
+                return url.pathname.replace(/^\/+/, '');
+            }
+            catch {
+                return '';
+            }
+        }
+        return key;
+    }
+    isManagedFile(key) {
+        const cleanKey = this.extractObjectKey(key);
+        if (!cleanKey)
+            return false;
+        if (!key.startsWith('http'))
+            return true;
+        return Boolean(this.publicDomain && key.startsWith(this.publicDomain));
+    }
     async uploadFile(file, folder = 'avatars') {
         const fileExtension = file.originalname.split('.').pop();
         const fileName = `${folder}/${(0, uuid_1.v4)()}.${fileExtension}`;
@@ -57,16 +83,28 @@ let R2Service = class R2Service {
             throw new common_1.InternalServerErrorException('Faylni yuklashda xatolik yuz berdi');
         }
     }
+    async uploadBuffer(body, key, contentType = 'application/octet-stream') {
+        try {
+            const command = new client_s3_1.PutObjectCommand({
+                Bucket: this.bucketName,
+                Key: key,
+                Body: body,
+                ContentType: contentType,
+            });
+            await this.s3Client.send(command);
+            if (this.publicDomain) {
+                return `${this.publicDomain}/${key}`;
+            }
+            return key;
+        }
+        catch (error) {
+            console.error('R2 Upload Buffer Error:', error);
+            throw new common_1.InternalServerErrorException('Faylni yuklashda xatolik yuz berdi');
+        }
+    }
     async getFileStream(key, range) {
         try {
-            let cleanKey = key;
-            if (this.publicDomain && key.startsWith(this.publicDomain)) {
-                cleanKey = key.replace(`${this.publicDomain}/`, '');
-            }
-            else if (key.startsWith('http')) {
-                const parts = key.split('/');
-                cleanKey = parts.slice(3).join('/');
-            }
+            const cleanKey = this.extractObjectKey(key);
             const command = new client_s3_1.GetObjectCommand({
                 Bucket: this.bucketName,
                 Key: cleanKey,
@@ -86,18 +124,28 @@ let R2Service = class R2Service {
             throw new common_1.InternalServerErrorException("Faylni o'qishda xatolik yuz berdi");
         }
     }
+    async getFileText(key) {
+        const { stream } = await this.getFileStream(key);
+        if (stream?.transformToString) {
+            return stream.transformToString();
+        }
+        if (stream instanceof stream_1.Readable) {
+            const chunks = [];
+            for await (const chunk of stream) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            return Buffer.concat(chunks).toString('utf-8');
+        }
+        if (Buffer.isBuffer(stream)) {
+            return stream.toString('utf-8');
+        }
+        return String(stream || '');
+    }
     async deleteFile(key) {
         try {
             if (!key)
                 return false;
-            let cleanKey = key;
-            if (this.publicDomain && key.includes(this.publicDomain)) {
-                cleanKey = key.split(`${this.publicDomain}/`)[1];
-            }
-            else if (key.startsWith('http')) {
-                const parts = key.split('/');
-                cleanKey = parts.slice(3).join('/');
-            }
+            const cleanKey = this.extractObjectKey(key);
             if (!cleanKey)
                 return false;
             const command = new client_s3_1.DeleteObjectCommand({

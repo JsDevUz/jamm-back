@@ -19,6 +19,7 @@ const mongoose_2 = require("mongoose");
 const user_schema_1 = require("./schemas/user.schema");
 const chats_service_1 = require("../chats/chats.service");
 const r2_service_1 = require("../common/services/r2.service");
+const app_limits_1 = require("../common/limits/app-limits");
 let UsersService = class UsersService {
     userModel;
     r2Service;
@@ -29,6 +30,8 @@ let UsersService = class UsersService {
         this.chatsService = chatsService;
     }
     async create(createUserDto) {
+        (0, app_limits_1.assertMaxChars)('Nickname', createUserDto.nickname, app_limits_1.APP_TEXT_LIMITS.nicknameChars);
+        (0, app_limits_1.assertMaxChars)('Username', createUserDto.username, app_limits_1.APP_TEXT_LIMITS.usernameChars);
         const createdUser = new this.userModel(createUserDto);
         return createdUser.save();
     }
@@ -84,6 +87,9 @@ let UsersService = class UsersService {
             .exec();
     }
     async updateProfile(userId, data) {
+        (0, app_limits_1.assertMaxChars)('Nickname', data.nickname, app_limits_1.APP_TEXT_LIMITS.nicknameChars);
+        (0, app_limits_1.assertMaxChars)('Username', data.username, app_limits_1.APP_TEXT_LIMITS.usernameChars);
+        (0, app_limits_1.assertMaxChars)('Bio', data.bio, app_limits_1.APP_TEXT_LIMITS.bioChars);
         if (data.username) {
             const existingUser = await this.userModel
                 .findOne({ username: data.username })

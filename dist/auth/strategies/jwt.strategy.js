@@ -33,6 +33,9 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
         if (!user) {
             throw new common_1.UnauthorizedException();
         }
+        if (user.isBlocked) {
+            throw new common_1.HttpException("Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.", common_1.HttpStatus.LOCKED);
+        }
         return user;
     }
 };

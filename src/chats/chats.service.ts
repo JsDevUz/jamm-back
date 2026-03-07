@@ -25,6 +25,12 @@ import {
   FutureE2EStrategy,
   EncryptionStrategy,
 } from '../common/encryption/encryption.strategies';
+import {
+  APP_LIMITS,
+  APP_TEXT_LIMITS,
+  assertMaxChars,
+  getTierLimit,
+} from '../common/limits/app-limits';
 
 @Injectable()
 export class ChatsService implements OnModuleInit {
@@ -135,6 +141,26 @@ export class ChatsService implements OnModuleInit {
     }
   }
 
+  private async ensureUsersCanJoinMoreGroups(userIds: string[]) {
+    for (const userId of userIds) {
+      const [user, joinedCount] = await Promise.all([
+        this.userModel.findById(userId).select('premiumStatus').lean().exec(),
+        this.chatModel.countDocuments({
+          isGroup: true,
+          createdBy: { $ne: new Types.ObjectId(userId) },
+          members: new Types.ObjectId(userId),
+        }),
+      ]);
+
+      const limit = getTierLimit(APP_LIMITS.groupsJoined, user?.premiumStatus);
+      if (joinedCount >= limit) {
+        throw new ForbiddenException(
+          `Foydalanuvchi maksimal ${limit} ta guruhga qo'shila oladi`,
+        );
+      }
+    }
+  }
+
   async getUserChats(
     userId: string,
     pagination: { page: number; limit: number } = { page: 1, limit: 15 },
@@ -234,6 +260,15 @@ export class ChatsService implements OnModuleInit {
       memberIds: string[];
     },
   ): Promise<ChatDocument> {
+    if (dto.isGroup) {
+      assertMaxChars('Guruh nomi', dto.name, APP_TEXT_LIMITS.groupNameChars);
+      assertMaxChars(
+        'Guruh haqida',
+        dto.description,
+        APP_TEXT_LIMITS.groupDescriptionChars,
+      );
+    }
+
     const members = [
       new Types.ObjectId(userId),
       ...dto.memberIds.map((id) => new Types.ObjectId(id)),
@@ -246,13 +281,15 @@ export class ChatsService implements OnModuleInit {
       });
 
       const premiumStatus = await this.premiumService.getPremiumStatus(userId);
-      const limit = premiumStatus === 'active' ? 3 : 1;
+      const limit = getTierLimit(APP_LIMITS.groupsCreated, premiumStatus);
 
       if (groupCount >= limit) {
         throw new ForbiddenException(
           `Siz maksimal darajadagi guruhlar soniga yetdingiz (${limit}). Ko'proq guruh ochish uchun Premium obunani faollashtiring.`,
         );
       }
+
+      await this.ensureUsersCanJoinMoreGroups(dto.memberIds);
 
       if (members.length > 40) {
         throw new BadRequestException(
@@ -387,6 +424,10 @@ export class ChatsService implements OnModuleInit {
         }
       }
 
+      if (added.length > 0) {
+        await this.ensureUsersCanJoinMoreGroups(added);
+      }
+
       currentMemberIds = new Set(newMemberIds);
 
       /** admins member bo'lib qoladi */
@@ -419,8 +460,18 @@ export class ChatsService implements OnModuleInit {
     chat.markModified('admins');
 
     /** GROUP INFO UPDATE */
-    if (dto.name !== undefined) chat.name = dto.name;
-    if (dto.description !== undefined) chat.description = dto.description;
+    if (dto.name !== undefined) {
+      assertMaxChars('Guruh nomi', dto.name, APP_TEXT_LIMITS.groupNameChars);
+      chat.name = dto.name;
+    }
+    if (dto.description !== undefined) {
+      assertMaxChars(
+        'Guruh haqida',
+        dto.description,
+        APP_TEXT_LIMITS.groupDescriptionChars,
+      );
+      chat.description = dto.description;
+    }
     if (dto.avatar !== undefined) chat.avatar = dto.avatar;
 
     const updated = await chat.save();
@@ -597,6 +648,7 @@ export class ChatsService implements OnModuleInit {
     );
 
     if (!isMember) {
+      await this.ensureUsersCanJoinMoreGroups([userId]);
       chat.members.push(userObjectId);
       await chat.save();
     }
@@ -668,6 +720,7 @@ export class ChatsService implements OnModuleInit {
     replayToId?: string,
   ): Promise<MessageDocument> {
     const chat = await this.getChat(chatId, userId);
+    assertMaxChars('Xabar', content, APP_TEXT_LIMITS.messageChars);
     const strategy = this.getEncryptionStrategy(chat);
     const encrypted = strategy.encrypt(content);
 
@@ -745,6 +798,7 @@ export class ChatsService implements OnModuleInit {
     }
 
     const chat = await this.getChat(message.chatId.toString(), userId);
+    assertMaxChars('Xabar', newContent, APP_TEXT_LIMITS.messageChars);
     const strategy = this.getEncryptionStrategy(chat);
     const encrypted = strategy.encrypt(newContent);
 

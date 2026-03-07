@@ -281,9 +281,12 @@ export declare class Lesson {
     fileUrl: string;
     fileName: string;
     fileSize: number;
+    streamType: string;
+    streamAssets: string[];
     urlSlug: string;
     description: string;
     views: number;
+    likes: Types.ObjectId[];
     addedAt: Date;
     comments: Comment[];
 }
@@ -369,6 +372,24 @@ export declare const LessonSchema: import("mongoose").Schema<Lesson, import("mon
     }, "id"> & {
         id: string;
     }> | undefined;
+    streamType?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    streamAssets?: import("mongoose").SchemaDefinitionProperty<string[], Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
     urlSlug?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
@@ -388,6 +409,15 @@ export declare const LessonSchema: import("mongoose").Schema<Lesson, import("mon
         id: string;
     }> | undefined;
     views?: import("mongoose").SchemaDefinitionProperty<number, Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    likes?: import("mongoose").SchemaDefinitionProperty<Types.ObjectId[], Lesson, Document<unknown, {}, Lesson, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;

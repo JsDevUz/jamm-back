@@ -102,6 +102,12 @@ export class Lesson {
   @Prop({ default: 0 })
   fileSize: number;
 
+  @Prop({ default: 'direct', enum: ['direct', 'hls'] })
+  streamType: string;
+
+  @Prop({ type: [String], default: [] })
+  streamAssets: string[];
+
   @Prop({ default: () => new Types.ObjectId().toString() })
   urlSlug: string;
 
@@ -110,6 +116,9 @@ export class Lesson {
 
   @Prop({ default: 0 })
   views: number;
+
+  @Prop({ type: [Types.ObjectId], ref: 'User', default: [] })
+  likes: Types.ObjectId[];
 
   @Prop({ default: () => new Date() })
   addedAt: Date;

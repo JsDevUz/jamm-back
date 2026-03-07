@@ -11,6 +11,11 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PremiumService } from '../premium/premium.service';
+import {
+  APP_LIMITS,
+  APP_TEXT_LIMITS,
+  getTierLimit,
+} from '../common/limits/app-limits';
 
 interface KnockEntry {
   displayName: string;
@@ -21,6 +26,7 @@ interface RoomInfo {
   peers: Map<string, string>; // socketId -> displayName
   isPrivate: boolean;
   title: string;
+  participantLimit: number;
   creatorSocketId: string;
   creatorUserId?: string;
   knockQueue: Map<string, KnockEntry>;
@@ -117,8 +123,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     try {
       const status = await this.premiumService.getPremiumStatus(userId);
-      const isPremium = status === 'active';
-      const limit = isPremium ? 3 : 1;
+      const limit = getTierLimit(APP_LIMITS.meetsCreated, status);
 
       if (activeRoomsCount >= limit) {
         client.emit('error', {
@@ -127,25 +132,37 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
         return;
       }
+
+      if (title.length > APP_TEXT_LIMITS.meetTitleChars) {
+        client.emit('error', {
+          message: `Meet nomi maksimal ${APP_TEXT_LIMITS.meetTitleChars} ta belgidan oshmasligi kerak`,
+        });
+        return;
+      }
+
+      const participantLimit = getTierLimit(APP_LIMITS.meetParticipants, status);
+
+      this.rooms.set(roomId, {
+        peers: new Map([[client.id, displayName]]),
+        isPrivate,
+        title,
+        participantLimit,
+        creatorSocketId: client.id,
+        creatorUserId: userId,
+        knockQueue: new Map(),
+      });
+
+      client.join(roomId);
+      client.emit('room-created', { roomId, isPrivate, title });
+      console.log(
+        `[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`,
+      );
+      return;
     } catch (err) {
       console.error('[Video] Premium check error:', err);
       client.emit('error', { message: 'Failed to check premium status' });
       return;
     }
-
-    this.rooms.set(roomId, {
-      peers: new Map([[client.id, displayName]]),
-      isPrivate,
-      title,
-      creatorSocketId: client.id,
-      creatorUserId: userId,
-      knockQueue: new Map(),
-    });
-    client.join(roomId);
-    client.emit('room-created', { roomId, isPrivate, title });
-    console.log(
-      `[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`,
-    );
   }
 
   @SubscribeMessage('join-room')
@@ -158,6 +175,13 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     if (!room) {
       client.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    if (room.peers.size >= room.participantLimit) {
+      client.emit('error', {
+        message: `Bu room uchun maksimal ${room.participantLimit} ta ishtirokchi ruxsat etilgan`,
+      });
       return;
     }
 
@@ -219,6 +243,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const entry = room.knockQueue.get(peerId);
     if (!entry) return;
+
+    if (room.peers.size >= room.participantLimit) {
+      this.server.to(peerId).emit('knock-rejected', {
+        reason: 'Room to‘lib bo‘lgan',
+      });
+      room.knockQueue.delete(peerId);
+      return;
+    }
 
     room.knockQueue.delete(peerId);
 

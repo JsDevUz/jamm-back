@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -12,6 +13,14 @@ import {
   ServerEncryptionStrategy,
   EncryptionType,
 } from '../common/encryption/encryption.strategies';
+import {
+  APP_LIMITS,
+  APP_TEXT_LIMITS,
+  assertMaxChars,
+  assertMaxWords,
+  getTierLimit,
+  startOfCurrentDay,
+} from '../common/limits/app-limits';
 
 @Injectable()
 export class PostsService {
@@ -110,7 +119,58 @@ export class PostsService {
     };
   }
 
+  private async getPostDailyLimit(userId: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('premiumStatus')
+      .lean()
+      .exec();
+    return getTierLimit(APP_LIMITS.postsPerDay, user?.premiumStatus);
+  }
+
+  private async getPostCommentLimit(userId: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('premiumStatus')
+      .lean()
+      .exec();
+    return getTierLimit(APP_LIMITS.postCommentsPerPost, user?.premiumStatus);
+  }
+
+  private countUserPostComments(post: any, userId: string) {
+    return Array.isArray(post.comments)
+      ? post.comments.reduce((total: number, comment: any) => {
+          const ownComment = comment.userId?.toString() === userId ? 1 : 0;
+          const ownReplies = Array.isArray(comment.replies)
+            ? comment.replies.filter(
+                (reply: any) => reply.userId?.toString() === userId,
+              ).length
+            : 0;
+          return total + ownComment + ownReplies;
+        }, 0)
+      : 0;
+  }
+
   async createPost(userId: string, content: string) {
+    if (!String(content || '').trim()) {
+      throw new BadRequestException('Post matni bo‘sh bo‘lishi mumkin emas');
+    }
+
+    assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
+
+    const dailyLimit = await this.getPostDailyLimit(userId);
+    const todayCount = await this.postModel.countDocuments({
+      author: new Types.ObjectId(userId),
+      isDeleted: false,
+      createdAt: { $gte: startOfCurrentDay() },
+    });
+
+    if (todayCount >= dailyLimit) {
+      throw new ForbiddenException(
+        `Siz bir kunda maksimal ${dailyLimit} ta gurung yoza olasiz`,
+      );
+    }
+
     const encrypted = this.encryptionStrategy.encrypt(content);
 
     const post = await this.postModel.create({
@@ -126,6 +186,36 @@ export class PostsService {
     const populated = await this.postModel
       .findById(post._id)
       .populate('author', 'username nickname avatar premiumStatus');
+
+    return this.formatPost(populated, userId);
+  }
+
+  async updatePost(postId: string, userId: string, content: string) {
+    const post = await this.postModel.findById(postId);
+    if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
+    if (post.author.toString() !== userId) {
+      throw new ForbiddenException('Faqat muallif tahrirlashi mumkin');
+    }
+
+    if (!String(content || '').trim()) {
+      throw new BadRequestException('Post matni bo‘sh bo‘lishi mumkin emas');
+    }
+
+    assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
+
+    const encrypted = this.encryptionStrategy.encrypt(content);
+
+    post.content = encrypted.encryptedContent;
+    post.iv = encrypted.iv;
+    post.authTag = encrypted.authTag;
+    post.keyVersion = encrypted.keyVersion;
+    post.isEncrypted = true;
+
+    await post.save();
+
+    const populated = await this.postModel
+      .findById(post._id)
+      .populate('author', 'username nickname avatar premiumStatus jammId');
 
     return this.formatPost(populated, userId);
   }
@@ -188,6 +278,19 @@ export class PostsService {
     return posts.map((p) => this.formatPost(p, currentUserId));
   }
 
+  async getLikedPosts(userId: string) {
+    const posts = await this.postModel
+      .find({
+        isDeleted: false,
+        likes: new Types.ObjectId(userId),
+      })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .limit(50)
+      .populate('author', 'username nickname avatar premiumStatus jammId');
+
+    return posts.map((post) => this.formatPost(post, userId));
+  }
+
   async likePost(postId: string, userId: string) {
     const post = await this.postModel.findById(postId);
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
@@ -223,6 +326,22 @@ export class PostsService {
   async addComment(postId: string, userId: string, content: string) {
     const post = await this.postModel.findById(postId);
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
+    if (!String(content || '').trim()) {
+      throw new BadRequestException('Izoh bo‘sh bo‘lishi mumkin emas');
+    }
+
+    assertMaxChars(
+      'Gurung izohi',
+      content.trim(),
+      APP_TEXT_LIMITS.postCommentChars,
+    );
+
+    const commentLimit = await this.getPostCommentLimit(userId);
+    if (this.countUserPostComments(post, userId) >= commentLimit) {
+      throw new ForbiddenException(
+        `Bu gurung uchun maksimal ${commentLimit} ta izoh yozishingiz mumkin`,
+      );
+    }
 
     const encrypted = this.encryptionStrategy.encrypt(content);
 
@@ -252,12 +371,28 @@ export class PostsService {
   ) {
     const post = await this.postModel.findById(postId);
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
+    if (!String(content || '').trim()) {
+      throw new BadRequestException('Javob bo‘sh bo‘lishi mumkin emas');
+    }
 
     const commentIndex = post.comments.findIndex(
       (c: any) => c._id.toString() === commentId,
     );
     if (commentIndex === -1) {
       throw new NotFoundException('Izoh topilmadi');
+    }
+
+    assertMaxChars(
+      'Gurung javobi',
+      content.trim(),
+      APP_TEXT_LIMITS.postCommentChars,
+    );
+
+    const commentLimit = await this.getPostCommentLimit(userId);
+    if (this.countUserPostComments(post, userId) >= commentLimit) {
+      throw new ForbiddenException(
+        `Bu gurung uchun maksimal ${commentLimit} ta izoh yozishingiz mumkin`,
+      );
     }
 
     const encrypted = this.encryptionStrategy.encrypt(content);
@@ -337,6 +472,7 @@ export class PostsService {
       throw new ForbiddenException("Faqat muallif o'chirishi mumkin");
     }
 
+    post.comments = [];
     post.isDeleted = true;
     await post.save();
 

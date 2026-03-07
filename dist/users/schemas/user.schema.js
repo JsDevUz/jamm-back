@@ -33,6 +33,7 @@ let User = class User {
     jammId;
     isOnboardingCompleted;
     onboardingData;
+    isBlocked;
 };
 exports.User = User;
 __decorate([
@@ -125,6 +126,10 @@ __decorate([
     (0, mongoose_1.Prop)({ type: Object, default: {} }),
     __metadata("design:type", Object)
 ], User.prototype, "onboardingData", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], User.prototype, "isBlocked", void 0);
 exports.User = User = __decorate([
     (0, mongoose_1.Schema)({ timestamps: true })
 ], User);

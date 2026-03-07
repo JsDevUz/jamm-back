@@ -25,6 +25,7 @@ const r2_service_1 = require("../common/services/r2.service");
 const encryption_service_1 = require("../common/encryption/encryption.service");
 const premium_service_1 = require("../premium/premium.service");
 const encryption_strategies_1 = require("../common/encryption/encryption.strategies");
+const app_limits_1 = require("../common/limits/app-limits");
 let ChatsService = class ChatsService {
     chatModel;
     messageModel;
@@ -128,6 +129,22 @@ let ChatsService = class ChatsService {
             return { ...message, content: '[Decryption Error]' };
         }
     }
+    async ensureUsersCanJoinMoreGroups(userIds) {
+        for (const userId of userIds) {
+            const [user, joinedCount] = await Promise.all([
+                this.userModel.findById(userId).select('premiumStatus').lean().exec(),
+                this.chatModel.countDocuments({
+                    isGroup: true,
+                    createdBy: { $ne: new mongoose_2.Types.ObjectId(userId) },
+                    members: new mongoose_2.Types.ObjectId(userId),
+                }),
+            ]);
+            const limit = (0, app_limits_1.getTierLimit)(app_limits_1.APP_LIMITS.groupsJoined, user?.premiumStatus);
+            if (joinedCount >= limit) {
+                throw new common_1.ForbiddenException(`Foydalanuvchi maksimal ${limit} ta guruhga qo'shila oladi`);
+            }
+        }
+    }
     async getUserChats(userId, pagination = { page: 1, limit: 15 }) {
         const skip = (pagination.page - 1) * pagination.limit;
         const [chats, total] = await Promise.all([
@@ -198,6 +215,10 @@ let ChatsService = class ChatsService {
         };
     }
     async createChat(userId, dto) {
+        if (dto.isGroup) {
+            (0, app_limits_1.assertMaxChars)('Guruh nomi', dto.name, app_limits_1.APP_TEXT_LIMITS.groupNameChars);
+            (0, app_limits_1.assertMaxChars)('Guruh haqida', dto.description, app_limits_1.APP_TEXT_LIMITS.groupDescriptionChars);
+        }
         const members = [
             new mongoose_2.Types.ObjectId(userId),
             ...dto.memberIds.map((id) => new mongoose_2.Types.ObjectId(id)),
@@ -208,10 +229,11 @@ let ChatsService = class ChatsService {
                 isGroup: true,
             });
             const premiumStatus = await this.premiumService.getPremiumStatus(userId);
-            const limit = premiumStatus === 'active' ? 3 : 1;
+            const limit = (0, app_limits_1.getTierLimit)(app_limits_1.APP_LIMITS.groupsCreated, premiumStatus);
             if (groupCount >= limit) {
                 throw new common_1.ForbiddenException(`Siz maksimal darajadagi guruhlar soniga yetdingiz (${limit}). Ko'proq guruh ochish uchun Premium obunani faollashtiring.`);
             }
+            await this.ensureUsersCanJoinMoreGroups(dto.memberIds);
             if (members.length > 40) {
                 throw new common_1.BadRequestException("Guruh a'zolari soni 40 dan oshmasligi kerak");
             }
@@ -300,6 +322,9 @@ let ChatsService = class ChatsService {
                     throw new common_1.ForbiddenException("Sizda a'zo o'chirish huquqi yo'q");
                 }
             }
+            if (added.length > 0) {
+                await this.ensureUsersCanJoinMoreGroups(added);
+            }
             currentMemberIds = new Set(newMemberIds);
             if (chat.admins) {
                 chat.admins.forEach((a) => {
@@ -317,10 +342,14 @@ let ChatsService = class ChatsService {
         chat.set('members', Array.from(currentMemberIds).map((id) => new mongoose_2.Types.ObjectId(id)));
         chat.markModified('members');
         chat.markModified('admins');
-        if (dto.name !== undefined)
+        if (dto.name !== undefined) {
+            (0, app_limits_1.assertMaxChars)('Guruh nomi', dto.name, app_limits_1.APP_TEXT_LIMITS.groupNameChars);
             chat.name = dto.name;
-        if (dto.description !== undefined)
+        }
+        if (dto.description !== undefined) {
+            (0, app_limits_1.assertMaxChars)('Guruh haqida', dto.description, app_limits_1.APP_TEXT_LIMITS.groupDescriptionChars);
             chat.description = dto.description;
+        }
         if (dto.avatar !== undefined)
             chat.avatar = dto.avatar;
         const updated = await chat.save();
@@ -449,6 +478,7 @@ let ChatsService = class ChatsService {
         const userObjectId = new mongoose_2.Types.ObjectId(userId);
         const isMember = chat.members.some((memberId) => memberId.equals(userObjectId));
         if (!isMember) {
+            await this.ensureUsersCanJoinMoreGroups([userId]);
             chat.members.push(userObjectId);
             await chat.save();
         }
@@ -502,6 +532,7 @@ let ChatsService = class ChatsService {
     }
     async sendMessage(chatId, userId, content, replayToId) {
         const chat = await this.getChat(chatId, userId);
+        (0, app_limits_1.assertMaxChars)('Xabar', content, app_limits_1.APP_TEXT_LIMITS.messageChars);
         const strategy = this.getEncryptionStrategy(chat);
         const encrypted = strategy.encrypt(content);
         const messageData = {
@@ -556,6 +587,7 @@ let ChatsService = class ChatsService {
             throw new common_1.ForbiddenException("O'chirilgan xabarni tahrirlab bo'lmaydi");
         }
         const chat = await this.getChat(message.chatId.toString(), userId);
+        (0, app_limits_1.assertMaxChars)('Xabar', newContent, app_limits_1.APP_TEXT_LIMITS.messageChars);
         const strategy = this.getEncryptionStrategy(chat);
         const encrypted = strategy.encrypt(newContent);
         message.content = encrypted.encryptedContent;

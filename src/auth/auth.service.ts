@@ -3,6 +3,8 @@ import {
   ConflictException,
   UnauthorizedException,
   NotFoundException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -77,6 +79,13 @@ export class AuthService {
       );
     }
 
+    if (user.isBlocked) {
+      throw new HttpException(
+        "Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.",
+        HttpStatus.LOCKED,
+      );
+    }
+
     // Compare password
     const isPasswordValid = await bcrypt.compare(
       loginDto.password,
@@ -100,6 +109,13 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException(
         "Tasdiqlash kodi noto'g'ri yoki allaqachon foydalanilgan",
+      );
+    }
+
+    if (user.isBlocked) {
+      throw new HttpException(
+        "Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.",
+        HttpStatus.LOCKED,
       );
     }
 

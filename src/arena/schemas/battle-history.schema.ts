@@ -23,6 +23,15 @@ export class BattleHistory {
         userId: String,
         nickname: String,
         score: Number,
+        total: Number,
+        answers: [Number],
+        results: [
+          {
+            questionIndex: Number,
+            correct: Boolean,
+            correctOptionIndex: Number,
+          },
+        ],
       },
     ],
     default: [],
@@ -31,6 +40,13 @@ export class BattleHistory {
     userId: string;
     nickname: string;
     score: number;
+    total?: number;
+    answers?: number[];
+    results?: {
+      questionIndex: number;
+      correct: boolean;
+      correctOptionIndex: number;
+    }[];
   }[];
 }
 

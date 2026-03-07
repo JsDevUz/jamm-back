@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Delete,
+  Patch,
   Body,
   Param,
   Query,
@@ -20,6 +21,20 @@ export class PostsController {
   @Post()
   createPost(@Request() req, @Body() body: { content: string }) {
     return this.postsService.createPost(req.user._id.toString(), body.content);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id')
+  updatePost(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: { content: string },
+  ) {
+    return this.postsService.updatePost(
+      id,
+      req.user._id.toString(),
+      body.content,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -44,6 +59,12 @@ export class PostsController {
   @Get('user/:userId')
   getUserPosts(@Request() req, @Param('userId') userId: string) {
     return this.postsService.getUserPosts(userId, req.user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('liked')
+  getLikedPosts(@Request() req) {
+    return this.postsService.getLikedPosts(req.user._id.toString());
   }
 
   @UseGuards(JwtAuthGuard)

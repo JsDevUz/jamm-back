@@ -18,6 +18,7 @@ const socket_io_1 = require("socket.io");
 const jwt_1 = require("@nestjs/jwt");
 const config_1 = require("@nestjs/config");
 const premium_service_1 = require("../premium/premium.service");
+const app_limits_1 = require("../common/limits/app-limits");
 let VideoGateway = class VideoGateway {
     jwtService;
     configService;
@@ -86,37 +87,51 @@ let VideoGateway = class VideoGateway {
         });
         try {
             const status = await this.premiumService.getPremiumStatus(userId);
-            const isPremium = status === 'active';
-            const limit = isPremium ? 3 : 1;
+            const limit = (0, app_limits_1.getTierLimit)(app_limits_1.APP_LIMITS.meetsCreated, status);
             if (activeRoomsCount >= limit) {
                 client.emit('error', {
                     message: "Siz maksimal darajadagi meetlar soniga yetdingiz. Ko'proq ochish uchun Premium obunani faollashtiring.",
                 });
                 return;
             }
+            if (title.length > app_limits_1.APP_TEXT_LIMITS.meetTitleChars) {
+                client.emit('error', {
+                    message: `Meet nomi maksimal ${app_limits_1.APP_TEXT_LIMITS.meetTitleChars} ta belgidan oshmasligi kerak`,
+                });
+                return;
+            }
+            const participantLimit = (0, app_limits_1.getTierLimit)(app_limits_1.APP_LIMITS.meetParticipants, status);
+            this.rooms.set(roomId, {
+                peers: new Map([[client.id, displayName]]),
+                isPrivate,
+                title,
+                participantLimit,
+                creatorSocketId: client.id,
+                creatorUserId: userId,
+                knockQueue: new Map(),
+            });
+            client.join(roomId);
+            client.emit('room-created', { roomId, isPrivate, title });
+            console.log(`[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`);
+            return;
         }
         catch (err) {
             console.error('[Video] Premium check error:', err);
             client.emit('error', { message: 'Failed to check premium status' });
             return;
         }
-        this.rooms.set(roomId, {
-            peers: new Map([[client.id, displayName]]),
-            isPrivate,
-            title,
-            creatorSocketId: client.id,
-            creatorUserId: userId,
-            knockQueue: new Map(),
-        });
-        client.join(roomId);
-        client.emit('room-created', { roomId, isPrivate, title });
-        console.log(`[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`);
     }
     async handleJoinRoom(client, data) {
         const { roomId, displayName } = data;
         const room = this.rooms.get(roomId);
         if (!room) {
             client.emit('error', { message: 'Room not found' });
+            return;
+        }
+        if (room.peers.size >= room.participantLimit) {
+            client.emit('error', {
+                message: `Bu room uchun maksimal ${room.participantLimit} ta ishtirokchi ruxsat etilgan`,
+            });
             return;
         }
         if (room.isPrivate) {
@@ -153,6 +168,13 @@ let VideoGateway = class VideoGateway {
         const entry = room.knockQueue.get(peerId);
         if (!entry)
             return;
+        if (room.peers.size >= room.participantLimit) {
+            this.server.to(peerId).emit('knock-rejected', {
+                reason: 'Room to‘lib bo‘lgan',
+            });
+            room.knockQueue.delete(peerId);
+            return;
+        }
         room.knockQueue.delete(peerId);
         this.server
             .to(peerId)

@@ -1,0 +1,34 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Document, Types } from 'mongoose';
+
+export type TestShareLinkDocument = TestShareLink & Document;
+
+@Schema({ timestamps: true })
+export class TestShareLink {
+  @Prop({ type: Types.ObjectId, ref: 'Test', required: true, index: true })
+  testId: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  createdBy: Types.ObjectId;
+
+  @Prop({ required: true, unique: true, index: true })
+  shortCode: string;
+
+  @Prop({ default: '' })
+  groupName: string;
+
+  @Prop({ default: true })
+  persistResults: boolean;
+
+  @Prop({ default: true })
+  showResults: boolean;
+
+  @Prop({ default: 0 })
+  timeLimit: number;
+
+  createdAt?: Date;
+
+  updatedAt?: Date;
+}
+
+export const TestShareLinkSchema = SchemaFactory.createForClass(TestShareLink);

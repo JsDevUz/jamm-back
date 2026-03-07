@@ -12,6 +12,10 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { ChatsService } from '../chats/chats.service';
 
 import { R2Service } from '../common/services/r2.service';
+import {
+  APP_TEXT_LIMITS,
+  assertMaxChars,
+} from '../common/limits/app-limits';
 
 @Injectable()
 export class UsersService {
@@ -22,6 +26,16 @@ export class UsersService {
   ) {}
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
+    assertMaxChars(
+      'Nickname',
+      createUserDto.nickname,
+      APP_TEXT_LIMITS.nicknameChars,
+    );
+    assertMaxChars(
+      'Username',
+      createUserDto.username,
+      APP_TEXT_LIMITS.usernameChars,
+    );
     const createdUser = new this.userModel(createUserDto);
     return createdUser.save();
   }
@@ -106,6 +120,10 @@ export class UsersService {
       bio?: string;
     },
   ): Promise<UserDocument | null> {
+    assertMaxChars('Nickname', data.nickname, APP_TEXT_LIMITS.nicknameChars);
+    assertMaxChars('Username', data.username, APP_TEXT_LIMITS.usernameChars);
+    assertMaxChars('Bio', data.bio, APP_TEXT_LIMITS.bioChars);
+
     if (data.username) {
       const existingUser = await this.userModel
         .findOne({ username: data.username })

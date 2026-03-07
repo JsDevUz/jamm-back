@@ -79,6 +79,9 @@ export class User {
 
   @Prop({ type: Object, default: {} })
   onboardingData: Record<string, any>;
+
+  @Prop({ default: false })
+  isBlocked: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -149,9 +149,12 @@ let Lesson = class Lesson {
     fileUrl;
     fileName;
     fileSize;
+    streamType;
+    streamAssets;
     urlSlug;
     description;
     views;
+    likes;
     addedAt;
     comments;
 };
@@ -181,6 +184,14 @@ __decorate([
     __metadata("design:type", Number)
 ], Lesson.prototype, "fileSize", void 0);
 __decorate([
+    (0, mongoose_1.Prop)({ default: 'direct', enum: ['direct', 'hls'] }),
+    __metadata("design:type", String)
+], Lesson.prototype, "streamType", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: [String], default: [] }),
+    __metadata("design:type", Array)
+], Lesson.prototype, "streamAssets", void 0);
+__decorate([
     (0, mongoose_1.Prop)({ default: () => new mongoose_2.Types.ObjectId().toString() }),
     __metadata("design:type", String)
 ], Lesson.prototype, "urlSlug", void 0);
@@ -192,6 +203,10 @@ __decorate([
     (0, mongoose_1.Prop)({ default: 0 }),
     __metadata("design:type", Number)
 ], Lesson.prototype, "views", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: [mongoose_2.Types.ObjectId], ref: 'User', default: [] }),
+    __metadata("design:type", Array)
+], Lesson.prototype, "likes", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: () => new Date() }),
     __metadata("design:type", Date)

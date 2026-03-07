@@ -33,12 +33,6 @@ export class Test {
   @Prop({ default: true })
   isPublic: boolean;
 
-  @Prop({ default: 0 })
-  timeLimit: number; // In minutes. 0 means unlimited
-
-  @Prop({ default: true })
-  showResults: boolean; // Whether to show right/wrong answers and final score
-
   @Prop({ default: 'single', enum: ['single', 'list'] })
   displayMode: string; // 'single' for one-by-one, 'list' for all at once
 }

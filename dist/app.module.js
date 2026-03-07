@@ -22,6 +22,9 @@ const premium_module_1 = require("./premium/premium.module");
 const meets_module_1 = require("./meets/meets.module");
 const posts_module_1 = require("./posts/posts.module");
 const arena_module_1 = require("./arena/arena.module");
+const blogs_module_1 = require("./blogs/blogs.module");
+const app_settings_module_1 = require("./app-settings/app-settings.module");
+const app_access_guard_1 = require("./auth/guards/app-access.guard");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -52,11 +55,17 @@ exports.AppModule = AppModule = __decorate([
             meets_module_1.MeetsModule,
             posts_module_1.PostsModule,
             arena_module_1.ArenaModule,
+            blogs_module_1.BlogsModule,
+            app_settings_module_1.AppSettingsModule,
         ],
         providers: [
             {
                 provide: core_1.APP_GUARD,
                 useClass: throttler_1.ThrottlerGuard,
+            },
+            {
+                provide: core_1.APP_GUARD,
+                useClass: app_access_guard_1.AppAccessGuard,
             },
         ],
     })

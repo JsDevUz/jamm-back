@@ -13,6 +13,7 @@ export declare class CoursesService {
     constructor(courseModel: Model<CourseDocument>, userModel: Model<UserDocument>, encryptionService: EncryptionService, r2Service: R2Service, coursesGateway: CoursesGateway);
     private decryptText;
     private sanitizeCourse;
+    private canAccessLesson;
     getAllCoursesForUser(userId: string, pagination?: {
         page: number;
         limit: number;
@@ -38,10 +39,17 @@ export declare class CoursesService {
         fileUrl?: string;
         fileName?: string;
         fileSize?: number;
+        streamType?: string;
+        streamAssets?: string[];
         urlSlug?: string;
     }): Promise<CourseDocument>;
     removeLesson(courseId: string, lessonId: string, userId: string): Promise<CourseDocument>;
     incrementViews(courseId: string, lessonId: string): Promise<void>;
+    toggleLessonLike(courseId: string, lessonId: string, userId: string): Promise<{
+        liked: boolean;
+        likes: number;
+    }>;
+    getLikedLessons(userId: string): Promise<any[]>;
     enroll(courseId: string, user: {
         _id: string;
         nickname: string;

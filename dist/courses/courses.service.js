@@ -21,6 +21,7 @@ const encryption_service_1 = require("../common/encryption/encryption.service");
 const user_schema_1 = require("../users/schemas/user.schema");
 const r2_service_1 = require("../common/services/r2.service");
 const courses_gateway_1 = require("./courses.gateway");
+const app_limits_1 = require("../common/limits/app-limits");
 let CoursesService = class CoursesService {
     courseModel;
     userModel;
@@ -53,7 +54,9 @@ let CoursesService = class CoursesService {
     }
     sanitizeCourse(courseDoc, userId) {
         const course = courseDoc.toObject();
-        const isAdmin = course.createdBy.toString() === userId;
+        const ownerId = course.createdBy.toString();
+        course.members = (course.members || []).filter((m) => m.userId?.toString() !== ownerId);
+        const isAdmin = ownerId === userId;
         const isApprovedMember = course.members.some((m) => m.userId.toString() === userId && m.status === 'approved');
         if (!isAdmin && !isApprovedMember) {
             course.lessons = course.lessons.map((lesson, index) => {
@@ -62,6 +65,8 @@ let CoursesService = class CoursesService {
                 return {
                     ...lesson,
                     videoUrl: '',
+                    fileUrl: '',
+                    streamAssets: [],
                     description: "Darsni ko'rish uchun kursga a'zo bo'ling va admin tasdiqlashini kuting.",
                 };
             });
@@ -74,9 +79,15 @@ let CoursesService = class CoursesService {
             fileUrl: lesson.fileUrl,
             fileName: lesson.fileName,
             fileSize: lesson.fileSize,
+            streamType: lesson.streamType || 'direct',
+            streamAssets: lesson.streamAssets || [],
             urlSlug: lesson.urlSlug,
             description: lesson.description,
             views: lesson.views,
+            likes: lesson.likes?.length || 0,
+            liked: Array.isArray(lesson.likes)
+                ? lesson.likes.some((id) => id.toString() === userId)
+                : false,
             addedAt: lesson.addedAt,
             comments: (lesson.comments || []).map((comment) => {
                 const decryptedComment = this.decryptText(comment);
@@ -103,6 +114,15 @@ let CoursesService = class CoursesService {
         }));
         const { __v, ...safeCourse } = course;
         return safeCourse;
+    }
+    canAccessLesson(course, userId, lessonIndex) {
+        const ownerId = course.createdBy.toString();
+        if (ownerId === userId)
+            return true;
+        const isApprovedMember = (course.members || []).some((member) => member.userId?.toString() === userId && member.status === 'approved');
+        if (isApprovedMember)
+            return true;
+        return lessonIndex === 0;
     }
     async getAllCoursesForUser(userId, pagination = { page: 1, limit: 15 }) {
         const skip = (pagination.page - 1) * pagination.limit;
@@ -144,16 +164,15 @@ let CoursesService = class CoursesService {
         const user = await this.userModel.findById(userId);
         if (!user)
             throw new common_1.NotFoundException('Foydalanuvchi topilmadi');
-        const isPremium = user.premiumStatus === 'active';
-        console.log(`[DEBUG] Course creation user ${userId} premiumStatus: ${user.premiumStatus} -> isPremium=${isPremium}`);
-        const limit = isPremium ? 3 : 1;
+        (0, app_limits_1.assertMaxChars)('Kurs nomi', dto.name, app_limits_1.APP_TEXT_LIMITS.courseNameChars);
+        (0, app_limits_1.assertMaxChars)('Kurs tavsifi', dto.description, app_limits_1.APP_TEXT_LIMITS.courseDescriptionChars);
+        (0, app_limits_1.assertMaxChars)('Kurs kategoriyasi', dto.category, app_limits_1.APP_TEXT_LIMITS.courseCategoryChars);
+        const limit = (0, app_limits_1.getTierLimit)(app_limits_1.APP_LIMITS.coursesCreated, user.premiumStatus);
         const existingCoursesCount = await this.courseModel.countDocuments({
             createdBy: new mongoose_2.Types.ObjectId(userId),
         });
         if (existingCoursesCount >= limit) {
-            throw new common_1.ForbiddenException(isPremium
-                ? 'Premium obunachilar maksimal 3 ta kurs yarata oladi.'
-                : 'Bepul tarifda faqat 1 ta kurs yaratish mumkin. Koproq kurs yaratish uchun Premium xarid qiling.');
+            throw new common_1.ForbiddenException(`Siz maksimal ${limit} ta kurs yarata olasiz`);
         }
         let rawSlug = dto.urlSlug ||
             dto.name
@@ -190,6 +209,9 @@ let CoursesService = class CoursesService {
             throw new common_1.ForbiddenException("Siz bu kursni o'chira olmaysiz");
         }
         for (const lesson of course.lessons) {
+            for (const asset of lesson.streamAssets || []) {
+                await this.r2Service.deleteFile(asset);
+            }
             if (lesson.fileUrl) {
                 await this.r2Service.deleteFile(lesson.fileUrl);
             }
@@ -207,15 +229,14 @@ let CoursesService = class CoursesService {
             throw new common_1.ForbiddenException("Faqat kurs egasi dars qo'sha oladi");
         }
         const user = await this.userModel.findById(userId);
-        const isPremium = user?.premiumStatus === 'active';
-        console.log(`[DEBUG] Lesson addition user ${userId} premiumStatus: ${user?.premiumStatus} -> isPremium=${isPremium}`);
-        const limit = isPremium ? 30 : 5;
+        const limit = (0, app_limits_1.getTierLimit)(app_limits_1.APP_LIMITS.lessonsPerCourse, user?.premiumStatus);
         if (course.lessons.length >= limit) {
-            throw new common_1.ForbiddenException(isPremium
-                ? 'Premium obunachilar har bir kursda maksimal 30 ta dars yarata oladi.'
-                : "Bepul tarifda bitta kursga faqat 5 ta dars qo'shish mumkin.");
+            throw new common_1.ForbiddenException(`Har bir kursda maksimal ${limit} ta dars bo'lishi mumkin`);
         }
-        if (!isPremium && dto.type === 'file') {
+        (0, app_limits_1.assertMaxChars)('Dars sarlavhasi', dto.title, app_limits_1.APP_TEXT_LIMITS.lessonTitleChars);
+        (0, app_limits_1.assertMaxChars)('Dars tavsifi', dto.description, app_limits_1.APP_TEXT_LIMITS.lessonDescriptionChars);
+        if (!(0, app_limits_1.getTierLimit)({ ordinary: 0, premium: 1 }, user?.premiumStatus) &&
+            dto.type === 'file') {
             throw new common_1.ForbiddenException('Fayl yuklash uchun Premium obuna talab qilinadi');
         }
         let rawSlug = dto.urlSlug ||
@@ -236,6 +257,8 @@ let CoursesService = class CoursesService {
             fileUrl: dto.fileUrl || '',
             fileName: dto.fileName || '',
             fileSize: dto.fileSize || 0,
+            streamType: dto.streamType || 'direct',
+            streamAssets: dto.streamAssets || [],
             urlSlug: finalSlug,
             description: dto.description || '',
             views: 0,
@@ -251,6 +274,11 @@ let CoursesService = class CoursesService {
         }
         const lessonObj = course.lessons.find((l) => l._id.toString() === lessonId);
         if (lessonObj) {
+            for (const asset of lessonObj.streamAssets || []) {
+                await this.r2Service
+                    .deleteFile(asset)
+                    .catch((e) => console.error(`Failed to delete stream asset ${asset}:`, e));
+            }
             if (lessonObj.fileUrl) {
                 await this.r2Service
                     .deleteFile(lessonObj.fileUrl)
@@ -274,16 +302,72 @@ let CoursesService = class CoursesService {
             .updateOne({ _id: course._id, 'lessons._id': lesson._id }, { $inc: { 'lessons.$.views': 1 } })
             .exec();
     }
+    async toggleLessonLike(courseId, lessonId, userId) {
+        const course = await this.findById(courseId);
+        const lessonIndex = course.lessons.findIndex((lesson) => lesson._id.toString() === lessonId || lesson.urlSlug === lessonId);
+        if (lessonIndex === -1)
+            throw new common_1.NotFoundException('Dars topilmadi');
+        if (!this.canAccessLesson(course, userId, lessonIndex)) {
+            throw new common_1.ForbiddenException("Bu darsga like bosish uchun avval kursga kiring");
+        }
+        const lesson = course.lessons[lessonIndex];
+        const userObjectId = new mongoose_2.Types.ObjectId(userId);
+        const alreadyLiked = (lesson.likes || []).some((id) => id.equals(userObjectId));
+        if (alreadyLiked) {
+            lesson.likes = (lesson.likes || []).filter((id) => !id.equals(userObjectId));
+        }
+        else {
+            lesson.likes = [...(lesson.likes || []), userObjectId];
+        }
+        await course.save();
+        return {
+            liked: !alreadyLiked,
+            likes: lesson.likes.length,
+        };
+    }
+    async getLikedLessons(userId) {
+        const userObjectId = new mongoose_2.Types.ObjectId(userId);
+        const courses = await this.courseModel
+            .find({ 'lessons.likes': userObjectId })
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .limit(50)
+            .exec();
+        return courses.flatMap((course) => {
+            const safeCourse = this.sanitizeCourse(course, userId);
+            return (safeCourse.lessons || [])
+                .filter((lesson) => lesson.liked)
+                .map((lesson) => ({
+                _id: lesson._id,
+                title: lesson.title,
+                description: lesson.description,
+                likes: lesson.likes || 0,
+                views: lesson.views || 0,
+                urlSlug: lesson.urlSlug,
+                addedAt: lesson.addedAt,
+                course: {
+                    _id: safeCourse._id,
+                    name: safeCourse.name,
+                    image: safeCourse.image,
+                    urlSlug: safeCourse.urlSlug,
+                },
+            }));
+        });
+    }
     async enroll(courseId, user) {
         const course = await this.findById(courseId);
+        if (course.createdBy.toString() === user._id) {
+            throw new common_1.ForbiddenException("Kurs egasi o'z kursiga obuna bo'la olmaydi");
+        }
+        course.members = course.members.filter((m) => m.userId.toString() !== course.createdBy.toString());
         const alreadyMember = course.members.find((m) => m.userId.toString() === user._id);
         if (alreadyMember)
             return course;
+        const status = course.accessType === 'free_open' ? 'approved' : 'pending';
         course.members.push({
             userId: new mongoose_2.Types.ObjectId(user._id),
             name: user.nickname || user.username,
             avatar: (user.nickname || user.username).substring(0, 2).toUpperCase(),
-            status: 'pending',
+            status,
             joinedAt: new Date(),
         });
         const updatedCourse = await course.save();
@@ -376,6 +460,7 @@ let CoursesService = class CoursesService {
         const lesson = course.lessons.find((l) => l._id.toString() === lessonId);
         if (!lesson)
             throw new common_1.NotFoundException('Dars topilmadi');
+        (0, app_limits_1.assertMaxChars)('Dars izohi', text, app_limits_1.APP_TEXT_LIMITS.messageChars);
         const encrypted = this.encryptionService.encrypt(text);
         lesson.comments.push({
             userId: new mongoose_2.Types.ObjectId(user._id),
@@ -404,6 +489,7 @@ let CoursesService = class CoursesService {
         const comment = lesson.comments.find((c) => c._id.toString() === commentId);
         if (!comment)
             throw new common_1.NotFoundException('Izoh topilmadi');
+        (0, app_limits_1.assertMaxChars)('Dars javobi', text, app_limits_1.APP_TEXT_LIMITS.messageChars);
         const encrypted = this.encryptionService.encrypt(text);
         comment.replies.push({
             userId: new mongoose_2.Types.ObjectId(user._id),
