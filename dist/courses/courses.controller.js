@@ -66,9 +66,17 @@ let CoursesController = class CoursesController {
         const playlistName = 'master.m3u8';
         const playlistPath = (0, path_1.join)(outputDir, playlistName);
         const assetFolder = `courses/hls/${(0, crypto_1.randomUUID)()}`;
+        const keyFileName = 'enc.key';
+        const keyUriPlaceholder = '__JAMM_HLS_KEY_URI__';
+        const keyPath = (0, path_1.join)(tempRoot, keyFileName);
+        const keyInfoPath = (0, path_1.join)(tempRoot, 'enc.keyinfo');
+        const keyBuffer = (0, crypto_1.randomBytes)(16);
+        const keyIvHex = (0, crypto_1.randomBytes)(16).toString('hex');
         try {
             await (0, promises_1.writeFile)(inputPath, file.buffer);
             await (0, promises_1.mkdir)(outputDir, { recursive: true });
+            await (0, promises_1.writeFile)(keyPath, keyBuffer);
+            await (0, promises_1.writeFile)(keyInfoPath, `${keyUriPlaceholder}\n${keyPath}\n${keyIvHex}\n`);
             await execFileAsync('ffmpeg', [
                 '-y',
                 '-i',
@@ -93,12 +101,16 @@ let CoursesController = class CoursesController {
                 'vod',
                 '-hls_flags',
                 'independent_segments',
+                '-hls_key_info_file',
+                keyInfoPath,
                 '-hls_segment_filename',
                 (0, path_1.join)(outputDir, 'segment_%03d.ts'),
                 playlistPath,
             ]);
             const fileNames = (await (0, promises_1.readdir)(outputDir)).sort();
             const assetKeys = [];
+            const keyAsset = `${assetFolder}/${keyFileName}`;
+            await this.r2Service.uploadBuffer(keyBuffer, keyAsset, 'application/octet-stream');
             for (const fileName of fileNames) {
                 const filePath = (0, path_1.join)(outputDir, fileName);
                 const key = `${assetFolder}/${fileName}`;
@@ -109,6 +121,7 @@ let CoursesController = class CoursesController {
                 streamType: 'hls',
                 manifestUrl: `${assetFolder}/${playlistName}`,
                 assetKeys,
+                hlsKeyAsset: keyAsset,
                 fileName: file.originalname,
                 fileSize: file.size,
             };
@@ -245,6 +258,7 @@ let CoursesController = class CoursesController {
             url: fileUrl,
             fileName: file.originalname,
             fileSize: file.size,
+            hlsKeyAsset: '',
         };
     }
     async getLessonPlaybackToken(req, id, lessonId, userAgent, res) {
@@ -287,10 +301,12 @@ let CoursesController = class CoursesController {
         }
         if (asset.endsWith('.m3u8')) {
             const manifest = await this.r2Service.getFileText(assetKey);
+            const keyPath = `/courses/${id}/lessons/${lessonId}/hls-key`;
+            const resolvedManifest = manifest.replaceAll('__JAMM_HLS_KEY_URI__', keyPath);
             res.writeHead(200, this.buildPlaybackHeaders({
                 'Content-Type': 'application/vnd.apple.mpegurl',
             }));
-            res.end(manifest);
+            res.end(resolvedManifest);
             return;
         }
         const r2Data = await this.r2Service.getFileStream(assetKey, range);
@@ -307,6 +323,23 @@ let CoursesController = class CoursesController {
             res.writeHead(200, headers);
         }
         r2Data.stream.pipe(res);
+    }
+    async streamLessonHlsKey(req, id, lessonId, res, playbackToken) {
+        const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+        if (fetchDest === 'document' || fetchDest === 'iframe') {
+            throw new common_1.ForbiddenException("Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi");
+        }
+        const currentUserId = await this.resolvePlaybackUserId(req, id, lessonId, playbackToken);
+        const { lesson } = await this.getAuthorizedLessonForUser(id, lessonId, currentUserId);
+        if (!lesson.hlsKeyAsset) {
+            throw new common_1.NotFoundException('HLS key topilmadi');
+        }
+        const keyData = await this.r2Service.getFileStream(lesson.hlsKeyAsset);
+        res.writeHead(200, this.buildPlaybackHeaders({
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': keyData.contentLength,
+        }));
+        keyData.stream.pipe(res);
     }
     async streamLesson(req, id, lessonId, range, res, playbackToken) {
         const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
@@ -471,6 +504,17 @@ __decorate([
     __metadata("design:paramtypes", [Object, String, String, String, String, Object, String]),
     __metadata("design:returntype", Promise)
 ], CoursesController.prototype, "streamLessonHlsAsset", null);
+__decorate([
+    (0, common_1.Get)(':id/lessons/:lessonId/hls-key'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Param)('lessonId')),
+    __param(3, (0, common_1.Res)()),
+    __param(4, (0, common_1.Query)('playbackToken')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, String, Object, String]),
+    __metadata("design:returntype", Promise)
+], CoursesController.prototype, "streamLessonHlsKey", null);
 __decorate([
     (0, common_1.Get)(':id/lessons/:lessonId/stream'),
     __param(0, (0, common_1.Request)()),

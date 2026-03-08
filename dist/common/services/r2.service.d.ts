@@ -5,6 +5,11 @@ export declare class R2Service {
     private bucketName;
     private publicDomain;
     constructor(configService: ConfigService);
+    private readFirstDefined;
+    private readBooleanConfig;
+    private buildLegacyR2Endpoint;
+    private normalizePublicBaseUrl;
+    private normalizeEndpoint;
     private extractObjectKey;
     isManagedFile(key: string): boolean;
     uploadFile(file: Express.Multer.File, folder?: string): Promise<string>;

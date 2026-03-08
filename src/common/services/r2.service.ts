@@ -16,24 +16,101 @@ export class R2Service {
   private publicDomain: string;
 
   constructor(private configService: ConfigService) {
-    const accountId = this.configService.get<string>('R2_ACCOUNT_ID') || '';
+    const endpoint = this.normalizeEndpoint(
+      this.readFirstDefined([
+        'OBJECT_STORAGE_ENDPOINT',
+        'STORAGE_S3_ENDPOINT',
+        'B2_S3_ENDPOINT',
+      ]) || this.buildLegacyR2Endpoint(),
+    );
     const accessKeyId =
-      this.configService.get<string>('R2_ACCESS_KEY_ID') || '';
+      this.readFirstDefined([
+        'OBJECT_STORAGE_ACCESS_KEY_ID',
+        'STORAGE_S3_ACCESS_KEY_ID',
+        'B2_ACCESS_KEY_ID',
+        'R2_ACCESS_KEY_ID',
+      ]) || '';
     const secretAccessKey =
-      this.configService.get<string>('R2_SECRET_ACCESS_KEY') || '';
+      this.readFirstDefined([
+        'OBJECT_STORAGE_SECRET_ACCESS_KEY',
+        'STORAGE_S3_SECRET_ACCESS_KEY',
+        'B2_SECRET_ACCESS_KEY',
+        'R2_SECRET_ACCESS_KEY',
+      ]) || '';
+    const region =
+      this.readFirstDefined([
+        'OBJECT_STORAGE_REGION',
+        'STORAGE_S3_REGION',
+        'B2_REGION',
+        'R2_REGION',
+      ]) || 'auto';
 
-    this.bucketName = this.configService.get<string>('R2_BUCKET_NAME') || '';
+    this.bucketName =
+      this.readFirstDefined([
+        'OBJECT_STORAGE_BUCKET_NAME',
+        'STORAGE_S3_BUCKET_NAME',
+        'B2_BUCKET_NAME',
+        'R2_BUCKET_NAME',
+      ]) || '';
     this.publicDomain =
-      this.configService.get<string>('R2_PUBLIC_DOMAIN') || '';
+      this.normalizePublicBaseUrl(
+        this.readFirstDefined([
+          'OBJECT_STORAGE_PUBLIC_BASE_URL',
+          'STORAGE_CDN_BASE_URL',
+          'B2_PUBLIC_BASE_URL',
+          'CDN_PUBLIC_BASE_URL',
+          'R2_PUBLIC_DOMAIN',
+        ]) || '',
+      ) || '';
+    const forcePathStyle = this.readBooleanConfig([
+      'OBJECT_STORAGE_FORCE_PATH_STYLE',
+      'STORAGE_S3_FORCE_PATH_STYLE',
+      'B2_FORCE_PATH_STYLE',
+    ]);
 
     this.s3Client = new S3Client({
-      region: 'auto',
-      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      region,
+      endpoint: endpoint || undefined,
+      forcePathStyle,
       credentials: {
         accessKeyId,
         secretAccessKey,
       },
     });
+  }
+
+  private readFirstDefined(keys: string[]): string {
+    for (const key of keys) {
+      const value = this.configService.get<string>(key);
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+    }
+    return '';
+  }
+
+  private readBooleanConfig(keys: string[]): boolean | undefined {
+    const raw = this.readFirstDefined(keys);
+    if (!raw) return undefined;
+    return ['1', 'true', 'yes', 'on'].includes(raw.toLowerCase());
+  }
+
+  private buildLegacyR2Endpoint(): string {
+    const accountId = this.configService.get<string>('R2_ACCOUNT_ID') || '';
+    return accountId ? `https://${accountId}.r2.cloudflarestorage.com` : '';
+  }
+
+  private normalizePublicBaseUrl(value: string): string {
+    return String(value || '').trim().replace(/\/+$/, '');
+  }
+
+  private normalizeEndpoint(value: string): string {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) {
+      return raw.replace(/\/+$/, '');
+    }
+    return `https://${raw.replace(/\/+$/, '')}`;
   }
 
   private extractObjectKey(key: string): string {
@@ -79,15 +156,13 @@ export class R2Service {
 
       await this.s3Client.send(command);
 
-      // Return the public URL
-      // If publicDomain is provided, use it. Otherwise, return the key for internal use or construct a default R2 URL if public.
       if (this.publicDomain) {
         return `${this.publicDomain}/${fileName}`;
       }
 
-      return fileName; // Fallback to key if no public domain is set
+      return fileName;
     } catch (error) {
-      console.error('R2 Upload Error:', error);
+      console.error('Object storage upload error:', error);
       throw new InternalServerErrorException(
         'Faylni yuklashda xatolik yuz berdi',
       );
@@ -115,7 +190,7 @@ export class R2Service {
 
       return key;
     } catch (error) {
-      console.error('R2 Upload Buffer Error:', error);
+      console.error('Object storage buffer upload error:', error);
       throw new InternalServerErrorException(
         'Faylni yuklashda xatolik yuz berdi',
       );
@@ -152,7 +227,7 @@ export class R2Service {
         acceptRanges: response.AcceptRanges,
       };
     } catch (error) {
-      console.error('R2 GetStream Error:', error);
+      console.error('Object storage get stream error:', error);
       throw new InternalServerErrorException(
         "Faylni o'qishda xatolik yuz berdi",
       );
@@ -200,8 +275,7 @@ export class R2Service {
       await this.s3Client.send(command);
       return true;
     } catch (error) {
-      console.error('R2 Delete Error:', error);
-      // We don't throw error here to avoid blocking course/doc deletion if file is already gone
+      console.error('Object storage delete error:', error);
       return false;
     }
   }

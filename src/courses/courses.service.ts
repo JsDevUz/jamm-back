@@ -65,6 +65,7 @@ export class CoursesService {
           videoUrl: '',
           fileUrl: '',
           streamAssets: [],
+          hlsKeyAsset: '',
           description:
             "Darsni ko'rish uchun kursga a'zo bo'ling va admin tasdiqlashini kuting.",
         };
@@ -82,6 +83,7 @@ export class CoursesService {
       fileSize: lesson.fileSize,
       streamType: lesson.streamType || 'direct',
       streamAssets: lesson.streamAssets || [],
+      hlsKeyAsset: '',
       urlSlug: lesson.urlSlug,
       description: lesson.description,
       views: lesson.views,
@@ -266,6 +268,9 @@ export class CoursesService {
       for (const asset of lesson.streamAssets || []) {
         await this.r2Service.deleteFile(asset);
       }
+      if (lesson.hlsKeyAsset) {
+        await this.r2Service.deleteFile(lesson.hlsKeyAsset);
+      }
       if (lesson.fileUrl) {
         await this.r2Service.deleteFile(lesson.fileUrl);
       }
@@ -296,6 +301,7 @@ export class CoursesService {
       fileSize?: number;
       streamType?: string;
       streamAssets?: string[];
+      hlsKeyAsset?: string;
       urlSlug?: string;
     },
   ): Promise<CourseDocument> {
@@ -351,6 +357,7 @@ export class CoursesService {
       fileSize: dto.fileSize || 0,
       streamType: dto.streamType || 'direct',
       streamAssets: dto.streamAssets || [],
+      hlsKeyAsset: dto.hlsKeyAsset || '',
       urlSlug: finalSlug,
       description: dto.description || '',
       views: 0,
@@ -379,6 +386,16 @@ export class CoursesService {
           .deleteFile(asset)
           .catch((e) =>
             console.error(`Failed to delete stream asset ${asset}:`, e),
+          );
+      }
+      if (lessonObj.hlsKeyAsset) {
+        await this.r2Service
+          .deleteFile(lessonObj.hlsKeyAsset)
+          .catch((e) =>
+            console.error(
+              `Failed to delete HLS key asset ${lessonObj.hlsKeyAsset}:`,
+              e,
+            ),
           );
       }
       if (lessonObj.fileUrl) {

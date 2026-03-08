@@ -23,7 +23,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { R2Service } from '../common/services/r2.service';
 import type { Request as ExpressRequest, Response } from 'express';
 import { JwtService } from '@nestjs/jwt';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import { basename, extname, join } from 'path';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
@@ -77,10 +77,21 @@ export class CoursesController {
     const playlistName = 'master.m3u8';
     const playlistPath = join(outputDir, playlistName);
     const assetFolder = `courses/hls/${randomUUID()}`;
+    const keyFileName = 'enc.key';
+    const keyUriPlaceholder = '__JAMM_HLS_KEY_URI__';
+    const keyPath = join(tempRoot, keyFileName);
+    const keyInfoPath = join(tempRoot, 'enc.keyinfo');
+    const keyBuffer = randomBytes(16);
+    const keyIvHex = randomBytes(16).toString('hex');
 
     try {
       await writeFile(inputPath, file.buffer);
       await mkdir(outputDir, { recursive: true });
+      await writeFile(keyPath, keyBuffer);
+      await writeFile(
+        keyInfoPath,
+        `${keyUriPlaceholder}\n${keyPath}\n${keyIvHex}\n`,
+      );
 
       await execFileAsync('ffmpeg', [
         '-y',
@@ -106,6 +117,8 @@ export class CoursesController {
         'vod',
         '-hls_flags',
         'independent_segments',
+        '-hls_key_info_file',
+        keyInfoPath,
         '-hls_segment_filename',
         join(outputDir, 'segment_%03d.ts'),
         playlistPath,
@@ -113,6 +126,13 @@ export class CoursesController {
 
       const fileNames = (await readdir(outputDir)).sort();
       const assetKeys: string[] = [];
+
+      const keyAsset = `${assetFolder}/${keyFileName}`;
+      await this.r2Service.uploadBuffer(
+        keyBuffer,
+        keyAsset,
+        'application/octet-stream',
+      );
 
       for (const fileName of fileNames) {
         const filePath = join(outputDir, fileName);
@@ -129,6 +149,7 @@ export class CoursesController {
         streamType: 'hls' as const,
         manifestUrl: `${assetFolder}/${playlistName}`,
         assetKeys,
+        hlsKeyAsset: keyAsset,
         fileName: file.originalname,
         fileSize: file.size,
       };
@@ -322,6 +343,7 @@ export class CoursesController {
       fileSize?: number;
       streamType?: string;
       streamAssets?: string[];
+      hlsKeyAsset?: string;
     },
   ) {
     return this.coursesService.addLesson(id, req.user._id.toString(), body);
@@ -376,6 +398,7 @@ export class CoursesController {
       url: fileUrl,
       fileName: file.originalname,
       fileSize: file.size,
+      hlsKeyAsset: '',
     };
   }
 
@@ -465,13 +488,18 @@ export class CoursesController {
 
     if (asset.endsWith('.m3u8')) {
       const manifest = await this.r2Service.getFileText(assetKey);
+      const keyPath = `/courses/${id}/lessons/${lessonId}/hls-key`;
+      const resolvedManifest = manifest.replaceAll(
+        '__JAMM_HLS_KEY_URI__',
+        keyPath,
+      );
       res.writeHead(
         200,
         this.buildPlaybackHeaders({
           'Content-Type': 'application/vnd.apple.mpegurl',
         }),
       );
-      res.end(manifest);
+      res.end(resolvedManifest);
       return;
     }
 
@@ -490,6 +518,50 @@ export class CoursesController {
     }
 
     r2Data.stream.pipe(res);
+  }
+
+  @Get(':id/lessons/:lessonId/hls-key')
+  async streamLessonHlsKey(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Res() res: Response,
+    @Query('playbackToken') playbackToken?: string,
+  ) {
+    const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+    if (fetchDest === 'document' || fetchDest === 'iframe') {
+      throw new ForbiddenException(
+        "Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi",
+      );
+    }
+
+    const currentUserId = await this.resolvePlaybackUserId(
+      req,
+      id,
+      lessonId,
+      playbackToken,
+    );
+    const { lesson } = await this.getAuthorizedLessonForUser(
+      id,
+      lessonId,
+      currentUserId,
+    );
+
+    if (!lesson.hlsKeyAsset) {
+      throw new NotFoundException('HLS key topilmadi');
+    }
+
+    const keyData = await this.r2Service.getFileStream(lesson.hlsKeyAsset);
+
+    res.writeHead(
+      200,
+      this.buildPlaybackHeaders({
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': keyData.contentLength,
+      }),
+    );
+
+    keyData.stream.pipe(res);
   }
 
   @Get(':id/lessons/:lessonId/stream')

@@ -108,6 +108,9 @@ export class Lesson {
   @Prop({ type: [String], default: [] })
   streamAssets: string[];
 
+  @Prop({ default: '' })
+  hlsKeyAsset: string;
+
   @Prop({ default: () => new Types.ObjectId().toString() })
   urlSlug: string;
 

@@ -37,6 +37,7 @@ export declare class CoursesController {
         fileSize?: number;
         streamType?: string;
         streamAssets?: string[];
+        hlsKeyAsset?: string;
     }): Promise<import("./schemas/course.schema").CourseDocument>;
     removeLesson(req: any, id: string, lessonId: string): Promise<import("./schemas/course.schema").CourseDocument>;
     incrementViews(id: string, lessonId: string): Promise<void>;
@@ -48,6 +49,7 @@ export declare class CoursesController {
         streamType: "hls";
         manifestUrl: string;
         assetKeys: string[];
+        hlsKeyAsset: string;
         fileName: string;
         fileSize: number;
     } | {
@@ -55,6 +57,7 @@ export declare class CoursesController {
         url: string;
         fileName: string;
         fileSize: number;
+        hlsKeyAsset: string;
     }>;
     getLessonPlaybackToken(req: any, id: string, lessonId: string, userAgent: string, res: Response): Promise<{
         expiresIn: number;
@@ -62,6 +65,7 @@ export declare class CoursesController {
         streamUrl: string;
     }>;
     streamLessonHlsAsset(req: any, id: string, lessonId: string, asset: string, range: string, res: Response, playbackToken?: string): Promise<void>;
+    streamLessonHlsKey(req: any, id: string, lessonId: string, res: Response, playbackToken?: string): Promise<void>;
     streamLesson(req: any, id: string, lessonId: string, range: string, res: Response, playbackToken?: string): Promise<void>;
     enroll(req: any, id: string): Promise<import("./schemas/course.schema").CourseDocument>;
     approveUser(req: any, id: string, memberId: string): Promise<import("./schemas/course.schema").CourseDocument>;

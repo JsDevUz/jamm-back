@@ -41,6 +41,7 @@ export declare class CoursesService {
         fileSize?: number;
         streamType?: string;
         streamAssets?: string[];
+        hlsKeyAsset?: string;
         urlSlug?: string;
     }): Promise<CourseDocument>;
     removeLesson(courseId: string, lessonId: string, userId: string): Promise<CourseDocument>;

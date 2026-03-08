@@ -151,6 +151,7 @@ let Lesson = class Lesson {
     fileSize;
     streamType;
     streamAssets;
+    hlsKeyAsset;
     urlSlug;
     description;
     views;
@@ -191,6 +192,10 @@ __decorate([
     (0, mongoose_1.Prop)({ type: [String], default: [] }),
     __metadata("design:type", Array)
 ], Lesson.prototype, "streamAssets", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ default: '' }),
+    __metadata("design:type", String)
+], Lesson.prototype, "hlsKeyAsset", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ default: () => new mongoose_2.Types.ObjectId().toString() }),
     __metadata("design:type", String)

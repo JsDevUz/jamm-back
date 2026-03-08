@@ -283,6 +283,7 @@ export declare class Lesson {
     fileSize: number;
     streamType: string;
     streamAssets: string[];
+    hlsKeyAsset: string;
     urlSlug: string;
     description: string;
     views: number;
@@ -382,6 +383,15 @@ export declare const LessonSchema: import("mongoose").Schema<Lesson, import("mon
         id: string;
     }> | undefined;
     streamAssets?: import("mongoose").SchemaDefinitionProperty<string[], Lesson, Document<unknown, {}, Lesson, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    hlsKeyAsset?: import("mongoose").SchemaDefinitionProperty<string, Lesson, Document<unknown, {}, Lesson, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<Lesson & Required<{
         _id: Types.ObjectId;
