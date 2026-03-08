@@ -67,6 +67,68 @@ export class CoursesController {
     return basename(String(assetKey || '').split('?')[0]);
   }
 
+  private buildProtectedHlsKeyUrl(
+    courseId: string,
+    lessonId: string,
+    playbackToken?: string,
+  ) {
+    const baseUrl = `/courses/${courseId}/lessons/${lessonId}/hls-key`;
+    if (!playbackToken) return baseUrl;
+    return `${baseUrl}?playbackToken=${encodeURIComponent(playbackToken)}`;
+  }
+
+  private rewriteHybridManifest(
+    manifest: string,
+    lesson: any,
+    courseId: string,
+    lessonId: string,
+    playbackToken?: string,
+  ) {
+    const keyUrl = this.buildProtectedHlsKeyUrl(
+      courseId,
+      lessonId,
+      playbackToken,
+    );
+    const manifestKey = this.r2Service.getObjectKey(lesson.videoUrl || '');
+
+    return String(manifest || '')
+      .split(/\r?\n/)
+      .map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return line;
+
+        if (trimmed.startsWith('#EXT-X-KEY')) {
+          // Security note:
+          // Segments are served by CDN, but they remain AES-128 encrypted.
+          // The decryption key never goes to CDN directly; only this backend
+          // endpoint returns it after auth/playback-token validation.
+          return line
+            .replace('__JAMM_HLS_KEY_URI__', keyUrl)
+            .replace(/URI="([^"]*)"/, `URI="${keyUrl}"`);
+        }
+
+        if (trimmed.startsWith('#')) {
+          return line;
+        }
+
+        if (/^https?:\/\//i.test(trimmed)) {
+          return trimmed;
+        }
+
+        if (trimmed.endsWith('.ts') || trimmed.endsWith('.m4s')) {
+          // Hybrid-HLS:
+          // CDN serves encrypted segments directly to cut VPS traffic.
+          // Optional Cloudflare WAF Referer checks can help reduce casual abuse,
+          // but the real protection is that segments are useless without the key,
+          // and the key is only issued by the backend after access validation.
+          return this.r2Service.buildSiblingDeliveryUrl(manifestKey, trimmed);
+        }
+
+        return line;
+      })
+      .join('\n');
+  }
+
   private async transcodeVideoToHls(file: Express.Multer.File) {
     const tempRoot = await mkdtemp(join(tmpdir(), 'jamm-hls-'));
     const inputPath = join(
@@ -443,10 +505,11 @@ export class CoursesController {
 
     return {
       expiresIn: 60 * 60 * 2,
+      playbackToken: token,
       streamType: isHlsLesson ? 'hls' : 'direct',
       streamUrl: isHlsLesson
-        ? `/courses/${id}/lessons/${lessonId}/hls/${manifestName}`
-        : `/courses/${id}/lessons/${lessonId}/stream`,
+        ? `/courses/${id}/lessons/${lessonId}/hls/${manifestName}?playbackToken=${encodeURIComponent(token)}`
+        : `/courses/${id}/lessons/${lessonId}/stream?playbackToken=${encodeURIComponent(token)}`,
     };
   }
 
@@ -488,10 +551,12 @@ export class CoursesController {
 
     if (asset.endsWith('.m3u8')) {
       const manifest = await this.r2Service.getFileText(assetKey);
-      const keyPath = `/courses/${id}/lessons/${lessonId}/hls-key`;
-      const resolvedManifest = manifest.replaceAll(
-        '__JAMM_HLS_KEY_URI__',
-        keyPath,
+      const resolvedManifest = this.rewriteHybridManifest(
+        manifest,
+        lesson,
+        id,
+        lessonId,
+        playbackToken,
       );
       res.writeHead(
         200,

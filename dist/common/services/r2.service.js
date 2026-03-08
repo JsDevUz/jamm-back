@@ -13,6 +13,7 @@ exports.R2Service = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const client_s3_1 = require("@aws-sdk/client-s3");
+const path_1 = require("path");
 const stream_1 = require("stream");
 const uuid_1 = require("uuid");
 let R2Service = class R2Service {
@@ -131,6 +132,32 @@ let R2Service = class R2Service {
             return true;
         return Boolean(this.publicDomain && key.startsWith(this.publicDomain));
     }
+    getBucketName() {
+        return this.bucketName;
+    }
+    getPublicBaseUrl() {
+        return this.publicDomain;
+    }
+    getObjectKey(key) {
+        return this.extractObjectKey(key);
+    }
+    buildDeliveryUrl(key) {
+        const cleanKey = this.extractObjectKey(key);
+        if (!cleanKey)
+            return '';
+        if (!this.publicDomain) {
+            return cleanKey;
+        }
+        return `${this.publicDomain}/${cleanKey}`;
+    }
+    buildSiblingDeliveryUrl(parentKey, fileName) {
+        const parentObjectKey = this.extractObjectKey(parentKey);
+        const folder = path_1.posix.dirname(parentObjectKey);
+        const nextKey = folder && folder !== '.'
+            ? path_1.posix.join(folder, fileName)
+            : path_1.posix.normalize(fileName);
+        return this.buildDeliveryUrl(nextKey);
+    }
     async uploadFile(file, folder = 'avatars') {
         const fileExtension = file.originalname.split('.').pop();
         const fileName = `${folder}/${(0, uuid_1.v4)()}.${fileExtension}`;
@@ -142,10 +169,7 @@ let R2Service = class R2Service {
                 ContentType: file.mimetype,
             });
             await this.s3Client.send(command);
-            if (this.publicDomain) {
-                return `${this.publicDomain}/${fileName}`;
-            }
-            return fileName;
+            return this.publicDomain ? this.buildDeliveryUrl(fileName) : fileName;
         }
         catch (error) {
             console.error('Object storage upload error:', error);
@@ -161,10 +185,7 @@ let R2Service = class R2Service {
                 ContentType: contentType,
             });
             await this.s3Client.send(command);
-            if (this.publicDomain) {
-                return `${this.publicDomain}/${key}`;
-            }
-            return key;
+            return this.publicDomain ? this.buildDeliveryUrl(key) : key;
         }
         catch (error) {
             console.error('Object storage buffer upload error:', error);

@@ -59,6 +59,39 @@ let CoursesController = class CoursesController {
     getAssetFileName(assetKey) {
         return (0, path_1.basename)(String(assetKey || '').split('?')[0]);
     }
+    buildProtectedHlsKeyUrl(courseId, lessonId, playbackToken) {
+        const baseUrl = `/courses/${courseId}/lessons/${lessonId}/hls-key`;
+        if (!playbackToken)
+            return baseUrl;
+        return `${baseUrl}?playbackToken=${encodeURIComponent(playbackToken)}`;
+    }
+    rewriteHybridManifest(manifest, lesson, courseId, lessonId, playbackToken) {
+        const keyUrl = this.buildProtectedHlsKeyUrl(courseId, lessonId, playbackToken);
+        const manifestKey = this.r2Service.getObjectKey(lesson.videoUrl || '');
+        return String(manifest || '')
+            .split(/\r?\n/)
+            .map((line) => {
+            const trimmed = line.trim();
+            if (!trimmed)
+                return line;
+            if (trimmed.startsWith('#EXT-X-KEY')) {
+                return line
+                    .replace('__JAMM_HLS_KEY_URI__', keyUrl)
+                    .replace(/URI="([^"]*)"/, `URI="${keyUrl}"`);
+            }
+            if (trimmed.startsWith('#')) {
+                return line;
+            }
+            if (/^https?:\/\//i.test(trimmed)) {
+                return trimmed;
+            }
+            if (trimmed.endsWith('.ts') || trimmed.endsWith('.m4s')) {
+                return this.r2Service.buildSiblingDeliveryUrl(manifestKey, trimmed);
+            }
+            return line;
+        })
+            .join('\n');
+    }
     async transcodeVideoToHls(file) {
         const tempRoot = await (0, promises_1.mkdtemp)((0, path_1.join)((0, os_1.tmpdir)(), 'jamm-hls-'));
         const inputPath = (0, path_1.join)(tempRoot, `input${(0, path_1.extname)(file.originalname || '') || '.mp4'}`);
@@ -282,10 +315,11 @@ let CoursesController = class CoursesController {
         const manifestName = this.getAssetFileName(lesson.videoUrl);
         return {
             expiresIn: 60 * 60 * 2,
+            playbackToken: token,
             streamType: isHlsLesson ? 'hls' : 'direct',
             streamUrl: isHlsLesson
-                ? `/courses/${id}/lessons/${lessonId}/hls/${manifestName}`
-                : `/courses/${id}/lessons/${lessonId}/stream`,
+                ? `/courses/${id}/lessons/${lessonId}/hls/${manifestName}?playbackToken=${encodeURIComponent(token)}`
+                : `/courses/${id}/lessons/${lessonId}/stream?playbackToken=${encodeURIComponent(token)}`,
         };
     }
     async streamLessonHlsAsset(req, id, lessonId, asset, range, res, playbackToken) {
@@ -301,8 +335,7 @@ let CoursesController = class CoursesController {
         }
         if (asset.endsWith('.m3u8')) {
             const manifest = await this.r2Service.getFileText(assetKey);
-            const keyPath = `/courses/${id}/lessons/${lessonId}/hls-key`;
-            const resolvedManifest = manifest.replaceAll('__JAMM_HLS_KEY_URI__', keyPath);
+            const resolvedManifest = this.rewriteHybridManifest(manifest, lesson, id, lessonId, playbackToken);
             res.writeHead(200, this.buildPlaybackHeaders({
                 'Content-Type': 'application/vnd.apple.mpegurl',
             }));

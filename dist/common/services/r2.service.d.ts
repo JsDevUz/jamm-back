@@ -12,6 +12,11 @@ export declare class R2Service {
     private normalizeEndpoint;
     private extractObjectKey;
     isManagedFile(key: string): boolean;
+    getBucketName(): string;
+    getPublicBaseUrl(): string;
+    getObjectKey(key: string): string;
+    buildDeliveryUrl(key: string): string;
+    buildSiblingDeliveryUrl(parentKey: string, fileName: string): string;
     uploadFile(file: Express.Multer.File, folder?: string): Promise<string>;
     uploadBuffer(body: Buffer | string, key: string, contentType?: string): Promise<string>;
     getFileStream(key: string, range?: string): Promise<{

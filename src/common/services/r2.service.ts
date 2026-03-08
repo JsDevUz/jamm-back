@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { posix } from 'path';
 import { Readable } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -139,6 +140,40 @@ export class R2Service {
     return Boolean(this.publicDomain && key.startsWith(this.publicDomain));
   }
 
+  getBucketName(): string {
+    return this.bucketName;
+  }
+
+  getPublicBaseUrl(): string {
+    return this.publicDomain;
+  }
+
+  getObjectKey(key: string): string {
+    return this.extractObjectKey(key);
+  }
+
+  buildDeliveryUrl(key: string): string {
+    const cleanKey = this.extractObjectKey(key);
+    if (!cleanKey) return '';
+
+    if (!this.publicDomain) {
+      return cleanKey;
+    }
+
+    return `${this.publicDomain}/${cleanKey}`;
+  }
+
+  buildSiblingDeliveryUrl(parentKey: string, fileName: string): string {
+    const parentObjectKey = this.extractObjectKey(parentKey);
+    const folder = posix.dirname(parentObjectKey);
+    const nextKey =
+      folder && folder !== '.'
+        ? posix.join(folder, fileName)
+        : posix.normalize(fileName);
+
+    return this.buildDeliveryUrl(nextKey);
+  }
+
   async uploadFile(
     file: Express.Multer.File,
     folder: string = 'avatars',
@@ -156,11 +191,7 @@ export class R2Service {
 
       await this.s3Client.send(command);
 
-      if (this.publicDomain) {
-        return `${this.publicDomain}/${fileName}`;
-      }
-
-      return fileName;
+      return this.publicDomain ? this.buildDeliveryUrl(fileName) : fileName;
     } catch (error) {
       console.error('Object storage upload error:', error);
       throw new InternalServerErrorException(
@@ -184,11 +215,7 @@ export class R2Service {
 
       await this.s3Client.send(command);
 
-      if (this.publicDomain) {
-        return `${this.publicDomain}/${key}`;
-      }
-
-      return key;
+      return this.publicDomain ? this.buildDeliveryUrl(key) : key;
     } catch (error) {
       console.error('Object storage buffer upload error:', error);
       throw new InternalServerErrorException(

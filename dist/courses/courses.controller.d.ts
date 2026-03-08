@@ -10,6 +10,8 @@ export declare class CoursesController {
     private buildUserAgentHash;
     private getMimeType;
     private getAssetFileName;
+    private buildProtectedHlsKeyUrl;
+    private rewriteHybridManifest;
     private transcodeVideoToHls;
     private getPlaybackCookieName;
     private readCookie;
@@ -61,6 +63,7 @@ export declare class CoursesController {
     }>;
     getLessonPlaybackToken(req: any, id: string, lessonId: string, userAgent: string, res: Response): Promise<{
         expiresIn: number;
+        playbackToken: string;
         streamType: string;
         streamUrl: string;
     }>;
