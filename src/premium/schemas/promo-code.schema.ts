@@ -5,6 +5,9 @@ export type PromoCodeDocument = PromoCode & Document;
 
 @Schema({ timestamps: true })
 export class PromoCode {
+  @Prop({ required: true, trim: true, uppercase: true, index: true })
+  displayCode: string;
+
   @Prop({ required: true, unique: true })
   code: string; // This will store the hashed promo code
 

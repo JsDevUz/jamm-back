@@ -140,6 +140,11 @@ export class AuthService {
 
   private sanitizeUser(user: any) {
     const { password, __v, ...sanitized } = user.toObject();
-    return sanitized;
+    return {
+      ...sanitized,
+      selectedProfileDecorationId:
+        sanitized.selectedProfileDecorationId || null,
+      customProfileDecorationImage: sanitized.customProfileDecorationImage || null,
+    };
   }
 }

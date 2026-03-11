@@ -12,6 +12,8 @@ import { PresenceModule } from '../presence/presence.module';
 import { R2Service } from '../common/services/r2.service';
 import { EncryptionModule } from '../common/encryption/encryption.module';
 import { PremiumModule } from '../premium/premium.module';
+import { AppSettingsModule } from '../app-settings/app-settings.module';
+import { getJwtSecret } from '../auth/auth-cookie.util';
 
 @Module({
   imports: [
@@ -25,12 +27,13 @@ import { PremiumModule } from '../premium/premium.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'fallback-secret',
+        secret: getJwtSecret(configService),
       }),
     }),
     forwardRef(() => PresenceModule),
     EncryptionModule,
     PremiumModule,
+    AppSettingsModule,
   ],
   providers: [ChatsService, ChatsGateway, R2Service],
   controllers: [ChatsController],

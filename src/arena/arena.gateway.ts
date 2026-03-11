@@ -9,30 +9,41 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
 import { ArenaService, BattleRoom } from './arena.service';
+import { getAllowedOrigins } from '../common/config/cors.config';
+import { verifySocketToken } from '../common/auth/ws-auth.util';
+import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 
 // Gateway for real-time Arena Battle Room communication
 
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: { origin: getAllowedOrigins(), credentials: true },
   namespace: '/arena',
 })
 export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
+  private readonly rateLimiter = new SocketRateLimiter();
+
   constructor(
     private jwtService: JwtService,
+    private configService: ConfigService,
     private usersService: UsersService,
     private arenaService: ArenaService,
   ) {}
 
   async handleConnection(client: Socket) {
     try {
-      const token = client.handshake.auth.token;
-      if (token) {
-        const payload = this.jwtService.verify(token);
+      const payload = await verifySocketToken(
+        this.jwtService,
+        this.configService,
+        client,
+      );
+
+      if (payload) {
         const user = await this.usersService.findById(payload.sub);
         if (user) {
           client.data.user = user;
@@ -45,7 +56,9 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Guest Mode: No token or invalid token, but guestName provided
       const guestName = client.handshake.auth.guestName;
-      if (guestName) {
+      const allowGuestSockets =
+        this.configService.get<string>('ARENA_ALLOW_GUEST_SOCKETS') === 'true';
+      if (allowGuestSockets && guestName) {
         client.data.user = {
           _id: `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
           nickname: guestName,
@@ -87,6 +100,7 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
       visibility?: 'public' | 'unlisted';
     },
   ) {
+    this.rateLimiter.take(`arena:create:${client.id}`, 10, 60_000);
     const roomId = `battle_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const user = client.data.user;
 
@@ -122,6 +136,7 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { roomId: string },
   ) {
+    this.rateLimiter.take(`arena:join:${client.id}`, 30, 60_000);
     const room = this.arenaService.getActiveBattle(payload.roomId);
     if (!room) {
       return client.emit('error', 'Bellashuv topilmadi');
@@ -155,6 +170,7 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { roomId: string },
   ) {
+    this.rateLimiter.take(`arena:leave:${client.id}`, 60, 60_000);
     const room = this.arenaService.getActiveBattle(payload.roomId);
     if (room) {
       const idx = room.participants.findIndex((p) => p.socketId === client.id);
@@ -172,6 +188,7 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { roomId: string },
   ) {
+    this.rateLimiter.take(`arena:start:${client.id}`, 20, 60_000);
     const room = this.arenaService.getActiveBattle(payload.roomId);
     const user = client.data.user;
 
@@ -200,6 +217,7 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody()
     payload: { roomId: string; answerIndex: number },
   ) {
+    this.rateLimiter.take(`arena:answer:${client.id}`, 300, 60_000);
     const room = this.arenaService.getActiveBattle(payload.roomId);
     if (!room || room.status !== 'playing') return;
 
@@ -240,6 +258,7 @@ export class ArenaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { roomId: string },
   ) {
+    this.rateLimiter.take(`arena:next:${client.id}`, 120, 60_000);
     const room = this.arenaService.getActiveBattle(payload.roomId);
     const user = client.data.user;
 

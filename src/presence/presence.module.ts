@@ -8,6 +8,8 @@ import { PresenceGateway } from './presence.gateway';
 import { PresenceController } from './presence.controller';
 import { WsJwtGuard } from './guards/ws-jwt.guard';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import { AppSettingsModule } from '../app-settings/app-settings.module';
+import { getJwtSecret } from '../auth/auth-cookie.util';
 
 @Module({
   imports: [
@@ -16,10 +18,11 @@ import { User, UserSchema } from '../users/schemas/user.schema';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'fallback-secret',
+        secret: getJwtSecret(configService),
       }),
     }),
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    AppSettingsModule,
   ],
   controllers: [PresenceController],
   providers: [RedisPresenceService, PresenceGateway, WsJwtGuard],

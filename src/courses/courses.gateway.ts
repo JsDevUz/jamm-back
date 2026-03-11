@@ -12,10 +12,13 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { getAllowedOrigins } from '../common/config/cors.config';
+import { verifySocketToken } from '../common/auth/ws-auth.util';
+import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 
 @WebSocketGateway({
   namespace: '/courses',
-  cors: { origin: true, credentials: true },
+  cors: { origin: getAllowedOrigins(), credentials: true },
 })
 export class CoursesGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -24,6 +27,7 @@ export class CoursesGateway
   server: Server;
 
   private readonly logger = new Logger(CoursesGateway.name);
+  private readonly rateLimiter = new SocketRateLimiter();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -36,18 +40,15 @@ export class CoursesGateway
 
   async handleConnection(client: Socket) {
     try {
-      const token =
-        client.handshake?.auth?.token ||
-        (client.handshake?.query?.token as string);
+      const payload = await verifySocketToken(
+        this.jwtService,
+        this.configService,
+        client,
+      );
 
-      if (!token) {
+      if (!payload) {
         throw new Error('Authentication token missing');
       }
-
-      const secret =
-        this.configService.get<string>('JWT_SECRET') || 'fallback-secret';
-
-      const payload = await this.jwtService.verifyAsync(token, { secret });
 
       client.data.user = {
         _id: payload.sub,
@@ -77,6 +78,7 @@ export class CoursesGateway
     @MessageBody() data: { courseId: string },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`join_course:${client.id}`, 20, 60_000);
     const room = `course_${data.courseId}`;
     client.join(room);
     this.logger.debug(`Client ${client.id} joined room ${room}`);
@@ -88,6 +90,7 @@ export class CoursesGateway
     @MessageBody() data: { courseId: string },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`leave_course:${client.id}`, 30, 60_000);
     const room = `course_${data.courseId}`;
     client.leave(room);
     this.logger.debug(`Client ${client.id} left room ${room}`);

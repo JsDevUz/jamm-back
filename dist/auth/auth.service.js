@@ -121,7 +121,11 @@ let AuthService = class AuthService {
     }
     sanitizeUser(user) {
         const { password, __v, ...sanitized } = user.toObject();
-        return sanitized;
+        return {
+            ...sanitized,
+            selectedProfileDecorationId: sanitized.selectedProfileDecorationId || null,
+            customProfileDecorationImage: sanitized.customProfileDecorationImage || null,
+        };
     }
 };
 exports.AuthService = AuthService;

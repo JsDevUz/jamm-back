@@ -21,6 +21,9 @@ export type FlashcardDeckDocument = FlashcardDeck & Document;
 
 @Schema({ timestamps: true })
 export class FlashcardDeck {
+  @Prop({ unique: true, sparse: true })
+  urlSlug: string;
+
   @Prop({ required: true })
   title: string;
 

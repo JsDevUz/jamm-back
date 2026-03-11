@@ -16,6 +16,8 @@ const presence_gateway_1 = require("./presence.gateway");
 const presence_controller_1 = require("./presence.controller");
 const ws_jwt_guard_1 = require("./guards/ws-jwt.guard");
 const user_schema_1 = require("../users/schemas/user.schema");
+const app_settings_module_1 = require("../app-settings/app-settings.module");
+const auth_cookie_util_1 = require("../auth/auth-cookie.util");
 let PresenceModule = class PresenceModule {
 };
 exports.PresenceModule = PresenceModule;
@@ -27,10 +29,11 @@ exports.PresenceModule = PresenceModule = __decorate([
                 imports: [config_1.ConfigModule],
                 inject: [config_1.ConfigService],
                 useFactory: (configService) => ({
-                    secret: configService.get('JWT_SECRET') || 'fallback-secret',
+                    secret: (0, auth_cookie_util_1.getJwtSecret)(configService),
                 }),
             }),
             mongoose_1.MongooseModule.forFeature([{ name: user_schema_1.User.name, schema: user_schema_1.UserSchema }]),
+            app_settings_module_1.AppSettingsModule,
         ],
         controllers: [presence_controller_1.PresenceController],
         providers: [redis_presence_service_1.RedisPresenceService, presence_gateway_1.PresenceGateway, ws_jwt_guard_1.WsJwtGuard],

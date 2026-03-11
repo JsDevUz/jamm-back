@@ -111,8 +111,37 @@ let PremiumService = PremiumService_1 = class PremiumService {
         }
     }
     hashPromoCode(code) {
-        const salt = this.configService.get('PROMO_SALT') || 'default-promo-salt-!!';
+        const salt = this.configService.get('PROMO_SALT');
+        if (!salt) {
+            throw new Error('PROMO_SALT env is required');
+        }
         return crypto.createHmac('sha256', salt).update(code).digest('hex');
+    }
+    async createPromoCode(payload) {
+        const displayCode = String(payload.code || '')
+            .trim()
+            .toUpperCase();
+        if (!displayCode) {
+            throw new common_1.BadRequestException('Promo code is required');
+        }
+        const existing = await this.promoCodeModel
+            .findOne({ displayCode })
+            .select('_id')
+            .lean();
+        if (existing) {
+            throw new common_1.BadRequestException('Promo code already exists');
+        }
+        const hashedCode = this.hashPromoCode(displayCode);
+        return this.promoCodeModel.create({
+            displayCode,
+            code: hashedCode,
+            validFrom: payload.validFrom,
+            validUntil: payload.validUntil,
+            isActive: payload.isActive ?? true,
+            ...(payload.maxUses === undefined || payload.maxUses === null
+                ? {}
+                : { maxUses: payload.maxUses }),
+        });
     }
     async redeemPromo(userId, code) {
         const hashedCode = this.hashPromoCode(code);

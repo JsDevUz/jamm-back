@@ -17,6 +17,7 @@ import {
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CoursesService } from './courses.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -29,6 +30,26 @@ import { basename, extname, join } from 'path';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import {
+  LessonCommentDto,
+  MarkAttendanceDto,
+  SubmitLessonLinkedTestAttemptDto,
+  ReviewLessonHomeworkDto,
+  SetAttendanceStatusDto,
+  SetLessonOralAssessmentDto,
+  SubmitLessonHomeworkDto,
+  UpsertLessonHomeworkDto,
+  UpsertLessonLinkedTestDto,
+  UpsertLessonMaterialDto,
+} from './dto/course-interactions.dto';
+import {
+  CreateCourseDto,
+  CreateLessonDto,
+  UpdateLessonDto,
+} from './dto/course.dto';
+import { UploadValidationService } from '../common/uploads/upload-validation.service';
+import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,6 +59,7 @@ export class CoursesController {
     private coursesService: CoursesService,
     private r2Service: R2Service,
     private jwtService: JwtService,
+    private uploadValidationService: UploadValidationService,
   ) {}
 
   private buildUserAgentHash(userAgent?: string) {
@@ -71,26 +93,37 @@ export class CoursesController {
     courseId: string,
     lessonId: string,
     playbackToken?: string,
+    mediaId?: string,
   ) {
     const baseUrl = `/courses/${courseId}/lessons/${lessonId}/hls-key`;
+    const params = new URLSearchParams();
+    if (playbackToken) {
+      params.set('playbackToken', playbackToken);
+    }
+    if (mediaId) {
+      params.set('mediaId', mediaId);
+    }
+    const query = params.toString();
+    return query ? `${baseUrl}?${query}` : baseUrl;
+  }
+
+  private buildProtectedHomeworkHlsKeyUrl(
+    courseId: string,
+    lessonId: string,
+    assignmentId: string,
+    submissionUserId: string,
+    playbackToken?: string,
+  ) {
+    const baseUrl = `/courses/${courseId}/lessons/${lessonId}/homework/${assignmentId}/submissions/${submissionUserId}/hls-key`;
     if (!playbackToken) return baseUrl;
     return `${baseUrl}?playbackToken=${encodeURIComponent(playbackToken)}`;
   }
 
-  private rewriteHybridManifest(
+  private rewriteHybridManifestContent(
     manifest: string,
-    lesson: any,
-    courseId: string,
-    lessonId: string,
-    playbackToken?: string,
+    manifestKey: string,
+    keyUrl: string,
   ) {
-    const keyUrl = this.buildProtectedHlsKeyUrl(
-      courseId,
-      lessonId,
-      playbackToken,
-    );
-    const manifestKey = this.r2Service.getObjectKey(lesson.videoUrl || '');
-
     return String(manifest || '')
       .split(/\r?\n/)
       .map((line) => {
@@ -127,6 +160,56 @@ export class CoursesController {
         return line;
       })
       .join('\n');
+  }
+
+  private rewriteHybridManifest(
+    manifest: string,
+    mediaItem: any,
+    courseId: string,
+    lessonId: string,
+    playbackToken?: string,
+    mediaId?: string,
+  ) {
+    const keyUrl = this.buildProtectedHlsKeyUrl(
+      courseId,
+      lessonId,
+      playbackToken,
+      mediaId,
+    );
+    const manifestKey = this.r2Service.getObjectKey(mediaItem.videoUrl || '');
+    return this.rewriteHybridManifestContent(manifest, manifestKey, keyUrl);
+  }
+
+  private getManifestDurationSeconds(manifestContent: string) {
+    return String(manifestContent || '')
+      .split(/\r?\n/)
+      .reduce((sum, line) => {
+        const match = line.match(/^#EXTINF:([0-9.]+)/);
+        if (!match) return sum;
+        return sum + Number(match[1] || 0);
+      }, 0);
+  }
+
+  private async getVideoDurationSeconds(filePath: string) {
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v',
+        'error',
+        '-show_entries',
+        'format=duration',
+        '-of',
+        'default=noprint_wrappers=1:nokey=1',
+        filePath,
+      ]);
+      const duration = Number(String(stdout || '').trim());
+      if (Number.isFinite(duration) && duration > 0) {
+        return Math.round(duration);
+      }
+    } catch (error) {
+      console.error('Failed to read video duration with ffprobe:', error);
+    }
+
+    return 0;
   }
 
   private async transcodeVideoToHls(file: Express.Multer.File) {
@@ -188,6 +271,10 @@ export class CoursesController {
 
       const fileNames = (await readdir(outputDir)).sort();
       const assetKeys: string[] = [];
+      const manifestContent = await readFile(playlistPath, 'utf8');
+      const durationSeconds =
+        (await this.getVideoDurationSeconds(inputPath)) ||
+        Math.round(this.getManifestDurationSeconds(manifestContent));
 
       const keyAsset = `${assetFolder}/${keyFileName}`;
       await this.r2Service.uploadBuffer(
@@ -209,11 +296,13 @@ export class CoursesController {
 
       return {
         streamType: 'hls' as const,
+        fileUrl: `${assetFolder}/${playlistName}`,
         manifestUrl: `${assetFolder}/${playlistName}`,
         assetKeys,
         hlsKeyAsset: keyAsset,
         fileName: file.originalname,
         fileSize: file.size,
+        durationSeconds,
       };
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
@@ -234,59 +323,153 @@ export class CoursesController {
     return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
   }
 
-  private buildPlaybackHeaders(base: Record<string, any> = {}) {
-    return {
+  private buildPlaybackHeaders(
+    base: Record<string, any> = {},
+    cacheStrategy: 'no-cache' | 'static' | 'manifest' = 'no-cache',
+  ) {
+    const headers: Record<string, any> = {
       ...base,
-      'Cache-Control': 'private, no-store, no-cache, must-revalidate',
-      Pragma: 'no-cache',
-      Expires: '0',
       'Content-Disposition': 'inline',
       'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'same-site',
     };
+
+    if (cacheStrategy === 'static') {
+      // Long-term cache for immutable assets like TS segments and MP4s
+      headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    } else if (cacheStrategy === 'manifest') {
+      // Short cache for manifests which might be rewritten but are mostly stable
+      headers['Cache-Control'] = 'public, max-age=60';
+    } else {
+      // No cache for sensitive data like HLS keys or metadata
+      headers['Cache-Control'] = 'private, no-store, no-cache, must-revalidate';
+      headers['Pragma'] = 'no-cache';
+      headers['Expires'] = '0';
+    }
+
+    return headers;
   }
 
   private async getAuthorizedLessonForUser(
     courseId: string,
     lessonId: string,
     userId: string,
+    mediaId?: string,
   ) {
     const course = await this.coursesService.findById(courseId);
     if (!course) throw new NotFoundException('Course not found');
-
-    let hasAccess = false;
-
-    if (course.createdBy.toString() === userId) {
-      hasAccess = true;
-    } else {
-      const isApproved = course.members.some(
-        (m: any) => m.userId.toString() === userId && m.status === 'approved',
-      );
-      if (isApproved) hasAccess = true;
-    }
-
-    if (!hasAccess) {
-      const previewLessonIndex = course.lessons.findIndex(
-        (l: any) => l._id.toString() === lessonId || l.urlSlug === lessonId,
-      );
-      if (previewLessonIndex !== 0) {
-        throw new ForbiddenException("Darsni ko'rish huquqi yo'q");
-      }
-    }
 
     const lesson = course.lessons.find(
       (l: any) => l._id.toString() === lessonId || l.urlSlug === lessonId,
     );
     if (!lesson) throw new NotFoundException('Lesson not found');
 
-    if (!lesson.videoUrl && !lesson.fileUrl) {
+    const hasAccess = this.coursesService.canUserAccessLessonByIdentifier(
+      course,
+      userId,
+      lessonId,
+    );
+    if (!hasAccess) {
+      throw new ForbiddenException("Darsni ko'rish huquqi yo'q");
+    }
+
+    if (lesson.status === 'draft' && course.createdBy.toString() !== userId) {
+      throw new ForbiddenException("Dars hali e'lon qilinmagan");
+    }
+
+    const mediaItems =
+      Array.isArray(lesson.mediaItems) && lesson.mediaItems.length
+        ? lesson.mediaItems
+        : lesson.videoUrl || lesson.fileUrl
+          ? [
+              {
+                _id: lesson._id,
+                title: lesson.title,
+                videoUrl: lesson.videoUrl,
+                fileUrl: lesson.fileUrl,
+                fileName: lesson.fileName,
+                fileSize: lesson.fileSize,
+                streamType: lesson.streamType,
+                streamAssets: lesson.streamAssets,
+                hlsKeyAsset: lesson.hlsKeyAsset,
+              },
+            ]
+          : [];
+
+    const selectedMedia =
+      mediaItems.find(
+        (item: any) =>
+          item?._id?.toString?.() === mediaId ||
+          String(item?.id || '') === mediaId,
+      ) ||
+      mediaItems[0] ||
+      null;
+
+    if (!selectedMedia?.videoUrl && !selectedMedia?.fileUrl) {
       throw new NotFoundException('Fayl yoki video topilmadi');
     }
 
     return {
       course,
       lesson,
-      keyToStream: lesson.fileUrl || lesson.videoUrl,
+      media: selectedMedia,
+      keyToStream: selectedMedia.fileUrl || selectedMedia.videoUrl,
+    };
+  }
+
+  private async getAuthorizedHomeworkSubmissionForUser(
+    courseId: string,
+    lessonId: string,
+    assignmentId: string,
+    submissionUserId: string,
+    requesterUserId: string,
+  ) {
+    const course = await this.coursesService.findById(courseId);
+    if (!course) throw new NotFoundException('Course not found');
+
+    const lesson = course.lessons.find(
+      (item: any) =>
+        item._id.toString() === lessonId || item.urlSlug === lessonId,
+    ) as any;
+    if (!lesson) throw new NotFoundException('Lesson not found');
+
+    const rawHomework = Array.isArray(lesson.homework)
+      ? lesson.homework
+      : lesson.homework
+        ? [lesson.homework]
+        : [];
+    const assignment = rawHomework.find(
+      (item: any) =>
+        item?._id?.toString?.() === assignmentId ||
+        String(item?.id || '') === assignmentId,
+    );
+    if (!assignment) {
+      throw new NotFoundException('Homework assignment not found');
+    }
+
+    const submission = (assignment.submissions || []).find(
+      (item: any) => item?.userId?.toString?.() === submissionUserId,
+    );
+    if (!submission) {
+      throw new NotFoundException('Homework submission not found');
+    }
+
+    const isOwner = course.createdBy.toString() === requesterUserId;
+    const isSubmissionOwner = submission.userId.toString() === requesterUserId;
+    if (!isOwner && !isSubmissionOwner) {
+      throw new ForbiddenException("Bu uyga vazifani ko'rish huquqi yo'q");
+    }
+
+    if (!submission.fileUrl) {
+      throw new NotFoundException('Homework file not found');
+    }
+
+    return {
+      course,
+      lesson,
+      assignment,
+      submission,
+      keyToStream: submission.fileUrl,
     };
   }
 
@@ -317,7 +500,63 @@ export class CoursesController {
 
         return payload.sub as string;
       } catch (error) {
-        throw new UnauthorizedException('Playback token yaroqsiz yoki eskirgan');
+        throw new UnauthorizedException(
+          'Playback token yaroqsiz yoki eskirgan',
+        );
+      }
+    }
+
+    const authHeader = req.headers.authorization || '';
+    const bearerToken = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : null;
+
+    if (!bearerToken) {
+      throw new UnauthorizedException('Autentifikatsiya talab qilinadi');
+    }
+
+    try {
+      const payload = await this.jwtService.verifyAsync(bearerToken);
+      return payload.sub as string;
+    } catch (error) {
+      throw new UnauthorizedException('Autentifikatsiya xato');
+    }
+  }
+
+  private async resolveHomeworkPlaybackUserId(
+    req: any,
+    courseId: string,
+    lessonId: string,
+    assignmentId: string,
+    submissionUserId: string,
+    playbackToken?: string,
+  ) {
+    const cookieToken =
+      playbackToken || this.readCookie(req, this.getPlaybackCookieName());
+
+    if (cookieToken) {
+      try {
+        const payload = await this.jwtService.verifyAsync(cookieToken);
+        const expectedUaHash = this.buildUserAgentHash(
+          req.headers['user-agent'],
+        );
+
+        if (
+          payload?.type !== 'course-homework-playback' ||
+          payload?.courseId !== courseId ||
+          payload?.lessonId !== lessonId ||
+          payload?.assignmentId !== assignmentId ||
+          payload?.submissionUserId !== submissionUserId ||
+          payload?.uaHash !== expectedUaHash
+        ) {
+          throw new UnauthorizedException('Invalid playback token');
+        }
+
+        return payload.sub as string;
+      } catch (error) {
+        throw new UnauthorizedException(
+          'Playback token yaroqsiz yoki eskirgan',
+        );
       }
     }
 
@@ -367,17 +606,7 @@ export class CoursesController {
 
   @UseGuards(JwtAuthGuard)
   @Post()
-  create(
-    @Request() req,
-    @Body()
-    body: {
-      name: string;
-      description?: string;
-      image?: string;
-      category?: string;
-      price?: number;
-    },
-  ) {
+  create(@Request() req, @Body() body: CreateCourseDto) {
     return this.coursesService.create(req.user._id.toString(), body);
   }
 
@@ -394,21 +623,39 @@ export class CoursesController {
   addLesson(
     @Request() req,
     @Param('id') id: string,
-    @Body()
-    body: {
-      title: string;
-      videoUrl?: string;
-      description?: string;
-      type?: string;
-      fileUrl?: string;
-      fileName?: string;
-      fileSize?: number;
-      streamType?: string;
-      streamAssets?: string[];
-      hlsKeyAsset?: string;
-    },
+    @Body() body: CreateLessonDto,
   ) {
     return this.coursesService.addLesson(id, req.user._id.toString(), body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId')
+  updateLesson(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body() body: UpdateLessonDto,
+  ) {
+    return this.coursesService.updateLesson(
+      id,
+      lessonId,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/publish')
+  publishLesson(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.coursesService.publishLesson(
+      id,
+      lessonId,
+      req.user._id.toString(),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -445,11 +692,286 @@ export class CoursesController {
     );
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/lessons/:lessonId/attendance')
+  getLessonAttendance(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.coursesService.getLessonAttendance(
+      id,
+      lessonId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/lessons/:lessonId/attendance/self')
+  markOwnAttendance(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body() body: MarkAttendanceDto,
+  ) {
+    return this.coursesService.markOwnAttendance(id, lessonId, req.user, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/attendance/:userId')
+  setAttendanceStatus(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('userId') userId: string,
+    @Body() body: SetAttendanceStatusDto,
+  ) {
+    return this.coursesService.setAttendanceStatus(
+      id,
+      lessonId,
+      userId,
+      req.user._id.toString(),
+      body.status || 'absent',
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/lessons/:lessonId/homework')
+  getLessonHomework(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.coursesService.getLessonHomework(
+      id,
+      lessonId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/lessons/:lessonId/tests')
+  getLessonLinkedTests(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.coursesService.getLessonLinkedTests(
+      id,
+      lessonId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/tests')
+  upsertLessonLinkedTest(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body() body: UpsertLessonLinkedTestDto,
+  ) {
+    return this.coursesService.upsertLessonLinkedTest(
+      id,
+      lessonId,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/lessons/:lessonId/tests/:linkedTestId')
+  deleteLessonLinkedTest(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('linkedTestId') linkedTestId: string,
+  ) {
+    return this.coursesService.deleteLessonLinkedTest(
+      id,
+      lessonId,
+      linkedTestId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/lessons/:lessonId/tests/:linkedTestId/submit')
+  submitLessonLinkedTestAttempt(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('linkedTestId') linkedTestId: string,
+    @Body() body: SubmitLessonLinkedTestAttemptDto,
+  ) {
+    return this.coursesService.submitLessonLinkedTestAttempt(
+      id,
+      lessonId,
+      linkedTestId,
+      req.user,
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/lessons/:lessonId/materials')
+  getLessonMaterials(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.coursesService.getLessonMaterials(
+      id,
+      lessonId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/materials')
+  upsertLessonMaterial(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body() body: UpsertLessonMaterialDto,
+  ) {
+    return this.coursesService.upsertLessonMaterial(
+      id,
+      lessonId,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/lessons/:lessonId/materials/:materialId')
+  deleteLessonMaterial(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('materialId') materialId: string,
+  ) {
+    return this.coursesService.deleteLessonMaterial(
+      id,
+      lessonId,
+      materialId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/homework')
+  upsertLessonHomework(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body() body: UpsertLessonHomeworkDto,
+  ) {
+    return this.coursesService.upsertLessonHomework(
+      id,
+      lessonId,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/lessons/:lessonId/homework/:assignmentId')
+  deleteLessonHomework(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+  ) {
+    return this.coursesService.deleteLessonHomework(
+      id,
+      lessonId,
+      assignmentId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/lessons/:lessonId/homework/:assignmentId/submit')
+  submitLessonHomework(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+    @Body() body: SubmitLessonHomeworkDto,
+  ) {
+    return this.coursesService.submitLessonHomework(
+      id,
+      lessonId,
+      assignmentId,
+      req.user,
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/homework/:assignmentId/review/:userId')
+  reviewLessonHomework(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+    @Param('userId') userId: string,
+    @Body() body: ReviewLessonHomeworkDto,
+  ) {
+    return this.coursesService.reviewLessonHomework(
+      id,
+      lessonId,
+      assignmentId,
+      userId,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/oral-assessment/:userId')
+  setLessonOralAssessment(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('userId') userId: string,
+    @Body() body: SetLessonOralAssessmentDto,
+  ) {
+    return this.coursesService.setLessonOralAssessment(
+      id,
+      lessonId,
+      userId,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/lessons/:lessonId/grading')
+  getLessonGrading(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.coursesService.getLessonGrading(
+      id,
+      lessonId,
+      req.user._id.toString(),
+    );
+  }
 
   @UseGuards(JwtAuthGuard)
   @Post('upload-media')
-  @UseInterceptors(FileInterceptor('file'))
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.lessonMediaBytes),
+    ),
+  )
   async uploadMedia(@UploadedFile() file: Express.Multer.File) {
+    await this.uploadValidationService.validateCourseMediaUpload(file);
     if (file?.mimetype?.startsWith('video/')) {
       return this.transcodeVideoToHls(file);
     }
@@ -457,9 +979,11 @@ export class CoursesController {
     const fileUrl = await this.r2Service.uploadFile(file, 'courses');
     return {
       streamType: 'direct',
+      fileUrl,
       url: fileUrl,
       fileName: file.originalname,
       fileSize: file.size,
+      durationSeconds: 0,
       hlsKeyAsset: '',
     };
   }
@@ -472,11 +996,13 @@ export class CoursesController {
     @Param('lessonId') lessonId: string,
     @Headers('user-agent') userAgent: string,
     @Res({ passthrough: true }) res: Response,
+    @Query('mediaId') mediaId?: string,
   ) {
-    const { lesson } = await this.getAuthorizedLessonForUser(
+    const { media } = await this.getAuthorizedLessonForUser(
       id,
       lessonId,
       req.user._id.toString(),
+      mediaId,
     );
 
     const token = await this.jwtService.signAsync(
@@ -500,16 +1026,17 @@ export class CoursesController {
     });
 
     const isHlsLesson =
-      lesson.streamType === 'hls' || lesson.videoUrl?.endsWith('.m3u8');
-    const manifestName = this.getAssetFileName(lesson.videoUrl);
+      media.streamType === 'hls' || media.videoUrl?.endsWith('.m3u8');
+    const manifestName = this.getAssetFileName(media.videoUrl);
+    const mediaQuery = mediaId ? `&mediaId=${encodeURIComponent(mediaId)}` : '';
 
     return {
       expiresIn: 60 * 60 * 2,
       playbackToken: token,
       streamType: isHlsLesson ? 'hls' : 'direct',
       streamUrl: isHlsLesson
-        ? `/courses/${id}/lessons/${lessonId}/hls/${manifestName}?playbackToken=${encodeURIComponent(token)}`
-        : `/courses/${id}/lessons/${lessonId}/stream?playbackToken=${encodeURIComponent(token)}`,
+        ? `/courses/${id}/lessons/${lessonId}/hls/${manifestName}?playbackToken=${encodeURIComponent(token)}${mediaQuery}`
+        : `/courses/${id}/lessons/${lessonId}/stream?playbackToken=${encodeURIComponent(token)}${mediaQuery}`,
     };
   }
 
@@ -522,6 +1049,7 @@ export class CoursesController {
     @Headers('range') range: string,
     @Res() res: Response,
     @Query('playbackToken') playbackToken?: string,
+    @Query('mediaId') mediaId?: string,
   ) {
     const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
     if (fetchDest === 'document' || fetchDest === 'iframe') {
@@ -536,13 +1064,14 @@ export class CoursesController {
       lessonId,
       playbackToken,
     );
-    const { lesson } = await this.getAuthorizedLessonForUser(
+    const { media } = await this.getAuthorizedLessonForUser(
       id,
       lessonId,
       currentUserId,
+      mediaId,
     );
 
-    const assetKey = [lesson.videoUrl, ...(lesson.streamAssets || [])].find(
+    const assetKey = [media.videoUrl, ...(media.streamAssets || [])].find(
       (key: string) => this.getAssetFileName(key) === asset,
     );
     if (!assetKey) {
@@ -553,27 +1082,38 @@ export class CoursesController {
       const manifest = await this.r2Service.getFileText(assetKey);
       const resolvedManifest = this.rewriteHybridManifest(
         manifest,
-        lesson,
+        media,
         id,
         lessonId,
         playbackToken,
+        mediaId,
       );
       res.writeHead(
         200,
-        this.buildPlaybackHeaders({
-          'Content-Type': 'application/vnd.apple.mpegurl',
-        }),
+        this.buildPlaybackHeaders(
+          {
+            'Content-Type': 'application/vnd.apple.mpegurl',
+          },
+          'manifest',
+        ),
       );
       res.end(resolvedManifest);
       return;
     }
 
     const r2Data = await this.r2Service.getFileStream(assetKey, range);
-    const headers: any = this.buildPlaybackHeaders({
-      'Content-Type': r2Data.contentType,
-      'Content-Length': r2Data.contentLength,
-      'Accept-Ranges': 'bytes',
-    });
+
+    const cacheStrategy =
+      asset.endsWith('.ts') || asset.endsWith('.m4s') ? 'static' : 'no-cache';
+
+    const headers: any = this.buildPlaybackHeaders(
+      {
+        'Content-Type': r2Data.contentType,
+        'Content-Length': r2Data.contentLength,
+        'Accept-Ranges': 'bytes',
+      },
+      cacheStrategy,
+    );
 
     if (r2Data.contentRange) {
       headers['Content-Range'] = r2Data.contentRange;
@@ -592,6 +1132,7 @@ export class CoursesController {
     @Param('lessonId') lessonId: string,
     @Res() res: Response,
     @Query('playbackToken') playbackToken?: string,
+    @Query('mediaId') mediaId?: string,
   ) {
     const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
     if (fetchDest === 'document' || fetchDest === 'iframe') {
@@ -606,17 +1147,18 @@ export class CoursesController {
       lessonId,
       playbackToken,
     );
-    const { lesson } = await this.getAuthorizedLessonForUser(
+    const { media } = await this.getAuthorizedLessonForUser(
       id,
       lessonId,
       currentUserId,
+      mediaId,
     );
 
-    if (!lesson.hlsKeyAsset) {
+    if (!media.hlsKeyAsset) {
       throw new NotFoundException('HLS key topilmadi');
     }
 
-    const keyData = await this.r2Service.getFileStream(lesson.hlsKeyAsset);
+    const keyData = await this.r2Service.getFileStream(media.hlsKeyAsset);
 
     res.writeHead(
       200,
@@ -629,6 +1171,262 @@ export class CoursesController {
     keyData.stream.pipe(res);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get(
+    ':id/lessons/:lessonId/homework/:assignmentId/submissions/:userId/playback-token',
+  )
+  async getHomeworkSubmissionPlaybackToken(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+    @Param('userId') submissionUserId: string,
+  ) {
+    const { submission } = await this.getAuthorizedHomeworkSubmissionForUser(
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      req.user._id.toString(),
+    );
+
+    const token = await this.jwtService.signAsync(
+      {
+        sub: req.user._id.toString(),
+        courseId: id,
+        lessonId,
+        assignmentId,
+        submissionUserId,
+        type: 'course-homework-playback',
+        uaHash: this.buildUserAgentHash(req.headers['user-agent']),
+      },
+      { expiresIn: '2h' },
+    );
+
+    const isHlsSubmission =
+      submission.streamType === 'hls' || submission.fileUrl?.endsWith('.m3u8');
+    const basePath = `/courses/${id}/lessons/${lessonId}/homework/${assignmentId}/submissions/${submissionUserId}`;
+
+    return {
+      streamType: isHlsSubmission ? 'hls' : 'direct',
+      streamUrl: isHlsSubmission
+        ? `${basePath}/hls/master.m3u8?playbackToken=${encodeURIComponent(token)}`
+        : `${basePath}/stream?playbackToken=${encodeURIComponent(token)}`,
+      playbackToken: token,
+    };
+  }
+
+  @Get(
+    ':id/lessons/:lessonId/homework/:assignmentId/submissions/:userId/hls/:asset',
+  )
+  async streamHomeworkSubmissionHlsAsset(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+    @Param('userId') submissionUserId: string,
+    @Param('asset') asset: string,
+    @Headers('range') range: string,
+    @Res() res: Response,
+    @Query('playbackToken') playbackToken?: string,
+  ) {
+    const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+    if (fetchDest === 'document' || fetchDest === 'iframe') {
+      throw new ForbiddenException(
+        "Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi",
+      );
+    }
+
+    const currentUserId = await this.resolveHomeworkPlaybackUserId(
+      req,
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      playbackToken,
+    );
+    const { submission } = await this.getAuthorizedHomeworkSubmissionForUser(
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      currentUserId,
+    );
+
+    const assetKey =
+      asset === 'master.m3u8'
+        ? this.r2Service.getObjectKey(submission.fileUrl || '')
+        : (submission.streamAssets || []).find(
+            (item: string) => this.getAssetFileName(item) === asset,
+          );
+
+    if (!assetKey) {
+      throw new NotFoundException('HLS asset topilmadi');
+    }
+
+    if (asset.endsWith('.m3u8')) {
+      const manifest = await this.r2Service.getFileText(assetKey);
+      const keyUrl = this.buildProtectedHomeworkHlsKeyUrl(
+        id,
+        lessonId,
+        assignmentId,
+        submissionUserId,
+        playbackToken,
+      );
+      const resolvedManifest = this.rewriteHybridManifestContent(
+        manifest,
+        assetKey,
+        keyUrl,
+      );
+      res.writeHead(
+        200,
+        this.buildPlaybackHeaders(
+          {
+            'Content-Type': 'application/vnd.apple.mpegurl',
+          },
+          'manifest',
+        ),
+      );
+      res.end(resolvedManifest);
+      return;
+    }
+
+    const r2Data = await this.r2Service.getFileStream(assetKey, range);
+
+    const cacheStrategy =
+      asset.endsWith('.ts') || asset.endsWith('.m4s') ? 'static' : 'no-cache';
+
+    const headers: any = this.buildPlaybackHeaders(
+      {
+        'Content-Type': r2Data.contentType,
+        'Content-Length': r2Data.contentLength,
+        'Accept-Ranges': 'bytes',
+      },
+      cacheStrategy,
+    );
+
+    if (r2Data.contentRange) {
+      headers['Content-Range'] = r2Data.contentRange;
+      res.writeHead(206, headers);
+    } else {
+      res.writeHead(200, headers);
+    }
+
+    r2Data.stream.pipe(res);
+  }
+
+  @Get(
+    ':id/lessons/:lessonId/homework/:assignmentId/submissions/:userId/hls-key',
+  )
+  async streamHomeworkSubmissionHlsKey(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+    @Param('userId') submissionUserId: string,
+    @Res() res: Response,
+    @Query('playbackToken') playbackToken?: string,
+  ) {
+    const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+    if (fetchDest === 'document' || fetchDest === 'iframe') {
+      throw new ForbiddenException(
+        "Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi",
+      );
+    }
+
+    const currentUserId = await this.resolveHomeworkPlaybackUserId(
+      req,
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      playbackToken,
+    );
+    const { submission } = await this.getAuthorizedHomeworkSubmissionForUser(
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      currentUserId,
+    );
+
+    if (!submission.hlsKeyAsset) {
+      throw new NotFoundException('HLS key topilmadi');
+    }
+
+    const keyData = await this.r2Service.getFileStream(submission.hlsKeyAsset);
+    res.writeHead(
+      200,
+      this.buildPlaybackHeaders({
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': keyData.contentLength,
+      }),
+    );
+    keyData.stream.pipe(res);
+  }
+
+  @Get(
+    ':id/lessons/:lessonId/homework/:assignmentId/submissions/:userId/stream',
+  )
+  async streamHomeworkSubmission(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Param('assignmentId') assignmentId: string,
+    @Param('userId') submissionUserId: string,
+    @Headers('range') range: string,
+    @Res() res: Response,
+    @Query('playbackToken') playbackToken?: string,
+  ) {
+    const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+    if (fetchDest === 'document' || fetchDest === 'iframe') {
+      throw new ForbiddenException(
+        "Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi",
+      );
+    }
+
+    const currentUserId = await this.resolveHomeworkPlaybackUserId(
+      req,
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      playbackToken,
+    );
+    const { keyToStream } = await this.getAuthorizedHomeworkSubmissionForUser(
+      id,
+      lessonId,
+      assignmentId,
+      submissionUserId,
+      currentUserId,
+    );
+
+    const assetKey = this.r2Service.getObjectKey(keyToStream);
+    const r2Data = await this.r2Service.getFileStream(assetKey, range);
+
+    const cacheStrategy = assetKey.toLowerCase().endsWith('.mp4')
+      ? 'static'
+      : 'no-cache';
+
+    const headers: any = this.buildPlaybackHeaders(
+      {
+        'Content-Type': r2Data.contentType,
+        'Content-Length': r2Data.contentLength,
+        'Accept-Ranges': 'bytes',
+      },
+      cacheStrategy,
+    );
+
+    if (r2Data.contentRange) {
+      headers['Content-Range'] = r2Data.contentRange;
+      res.writeHead(206, headers);
+    } else {
+      res.writeHead(200, headers);
+    }
+
+    r2Data.stream.pipe(res);
+  }
+
   @Get(':id/lessons/:lessonId/stream')
   async streamLesson(
     @Request() req,
@@ -637,10 +1435,13 @@ export class CoursesController {
     @Headers('range') range: string,
     @Res() res: Response,
     @Query('playbackToken') playbackToken?: string,
+    @Query('mediaId') mediaId?: string,
   ) {
     const fetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
     if (fetchDest === 'document' || fetchDest === 'iframe') {
-      throw new ForbiddenException("Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi");
+      throw new ForbiddenException(
+        "Bu video havolasini to'g'ridan-to'g'ri ochib bo'lmaydi",
+      );
     }
 
     const currentUserId = await this.resolvePlaybackUserId(
@@ -653,15 +1454,23 @@ export class CoursesController {
       id,
       lessonId,
       currentUserId,
+      mediaId,
     );
 
     const r2Data = await this.r2Service.getFileStream(keyToStream, range);
 
-    const headers: any = this.buildPlaybackHeaders({
-      'Content-Type': r2Data.contentType,
-      'Content-Length': r2Data.contentLength,
-      'Accept-Ranges': 'bytes',
-    });
+    const cacheStrategy = keyToStream.toLowerCase().endsWith('.mp4')
+      ? 'static'
+      : 'no-cache';
+
+    const headers: any = this.buildPlaybackHeaders(
+      {
+        'Content-Type': r2Data.contentType,
+        'Content-Length': r2Data.contentLength,
+        'Accept-Ranges': 'bytes',
+      },
+      cacheStrategy,
+    );
 
     if (r2Data.contentRange) {
       headers['Content-Range'] = r2Data.contentRange;
@@ -733,7 +1542,7 @@ export class CoursesController {
     @Request() req,
     @Param('id') id: string,
     @Param('lessonId') lessonId: string,
-    @Body() body: { text: string },
+    @Body() body: LessonCommentDto,
   ) {
     return this.coursesService.addComment(id, lessonId, req.user, body.text);
   }
@@ -745,7 +1554,7 @@ export class CoursesController {
     @Param('id') id: string,
     @Param('lessonId') lessonId: string,
     @Param('commentId') commentId: string,
-    @Body() body: { text: string },
+    @Body() body: LessonCommentDto,
   ) {
     return this.coursesService.addReply(
       id,

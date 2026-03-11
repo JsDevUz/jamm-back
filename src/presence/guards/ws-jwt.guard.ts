@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { WsException } from '@nestjs/websockets';
 import { Socket } from 'socket.io';
+import { verifySocketToken } from '../../common/auth/ws-auth.util';
 
 /**
  * WebSocket JWT Guard — authenticates Socket.IO connections.
@@ -30,19 +31,17 @@ export class WsJwtGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const client: Socket = context.switchToWs().getClient<Socket>();
 
-    const token =
-      client.handshake?.auth?.token ||
-      (client.handshake?.query?.token as string);
-
-    if (!token) {
-      this.logger.warn(`Connection rejected: no token (socket ${client.id})`);
-      throw new WsException('Authentication token missing');
-    }
-
     try {
-      const secret =
-        this.configService.get<string>('JWT_SECRET') || 'fallback-secret';
-      const payload = await this.jwtService.verifyAsync(token, { secret });
+      const payload = await verifySocketToken(
+        this.jwtService,
+        this.configService,
+        client,
+      );
+
+      if (!payload) {
+        this.logger.warn(`Connection rejected: no token (socket ${client.id})`);
+        throw new WsException('Authentication token missing');
+      }
 
       // Attach user info to the socket for downstream handlers
       client.data.user = {

@@ -9,6 +9,7 @@ export declare class ChatsGateway implements OnGatewayInit, OnGatewayConnection,
     private readonly chatsService;
     server: Server;
     private readonly logger;
+    private readonly rateLimiter;
     constructor(jwtService: JwtService, configService: ConfigService, chatsService: ChatsService);
     afterInit(): void;
     handleConnection(client: Socket): Promise<void>;

@@ -7,6 +7,7 @@ import { ChatsGateway } from './chats.gateway';
 import { R2Service } from '../common/services/r2.service';
 import { EncryptionService } from '../common/encryption/encryption.service';
 import { PremiumService } from '../premium/premium.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 export declare class ChatsService implements OnModuleInit {
     private chatModel;
     private messageModel;
@@ -15,15 +16,20 @@ export declare class ChatsService implements OnModuleInit {
     private r2Service;
     private encryptionService;
     private premiumService;
-    constructor(chatModel: Model<ChatDocument>, messageModel: Model<MessageDocument>, userModel: Model<UserDocument>, chatsGateway: ChatsGateway, r2Service: R2Service, encryptionService: EncryptionService, premiumService: PremiumService);
+    private appSettingsService;
+    constructor(chatModel: Model<ChatDocument>, messageModel: Model<MessageDocument>, userModel: Model<UserDocument>, chatsGateway: ChatsGateway, r2Service: R2Service, encryptionService: EncryptionService, premiumService: PremiumService, appSettingsService: AppSettingsService);
     onModuleInit(): Promise<void>;
+    private buildSearchRegex;
     private backfillAdmins;
     private backfillPrivateUrls;
     private generateJammId;
     private backfillJammIds;
     private getEncryptionStrategy;
     private decryptMessage;
+    private decryptLastMessagePreview;
     private ensureUsersCanJoinMoreGroups;
+    private decorateChatMembers;
+    private decorateChatMessageUser;
     getUserChats(userId: string, pagination?: {
         page: number;
         limit: number;
@@ -36,12 +42,12 @@ export declare class ChatsService implements OnModuleInit {
             avatar: any;
             isGroup: any;
             privateurl: any;
-            members: any;
+            members: any[];
             createdBy: any;
             admins: any;
             isSavedMessages: any;
             urlSlug: any;
-            lastMessage: string | undefined;
+            lastMessage: string;
             lastMessageAt: any;
             updatedAt: any;
             createdAt: any;
@@ -52,6 +58,29 @@ export declare class ChatsService implements OnModuleInit {
         limit: number;
         totalPages: number;
     }>;
+    searchPrivateUsers(userId: string, query: string, limit?: number): Promise<{
+        id: any;
+        name: any;
+        username: any;
+        avatar: any;
+        premiumStatus: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
+        isOfficialProfile: boolean;
+        officialBadgeKey: any;
+        officialBadgeLabel: any;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }[]>;
+    searchUserGroups(userId: string, query: string, limit?: number): Promise<{
+        id: string;
+        urlSlug: string;
+        name: string;
+        avatar: string;
+        membersCount: number;
+        lastMessage: string;
+        lastMessageAt: Date | null;
+    }[]>;
     createChat(userId: string, dto: {
         isGroup: boolean;
         name?: string;
@@ -86,10 +115,7 @@ export declare class ChatsService implements OnModuleInit {
         jammId: number;
     }>;
     joinGroupByLink(slugOrId: string, userId: string): Promise<ChatDocument>;
-    getChatMessages(chatId: string, userId: string, pagination: {
-        page: number;
-        limit: number;
-    }): Promise<any>;
+    getChatMessages(chatId: string, userId: string, before?: string): Promise<any>;
     sendMessage(chatId: string, userId: string, content: string, replayToId?: string): Promise<MessageDocument>;
     editMessage(messageId: string, userId: string, newContent: string): Promise<MessageDocument>;
     deleteMessage(messageId: string, userId: string): Promise<MessageDocument>;

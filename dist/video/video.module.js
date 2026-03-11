@@ -12,6 +12,7 @@ const config_1 = require("@nestjs/config");
 const jwt_1 = require("@nestjs/jwt");
 const video_gateway_1 = require("./video.gateway");
 const premium_module_1 = require("../premium/premium.module");
+const auth_cookie_util_1 = require("../auth/auth-cookie.util");
 let VideoModule = class VideoModule {
 };
 exports.VideoModule = VideoModule;
@@ -23,7 +24,7 @@ exports.VideoModule = VideoModule = __decorate([
                 imports: [config_1.ConfigModule],
                 inject: [config_1.ConfigService],
                 useFactory: (configService) => ({
-                    secret: configService.get('JWT_SECRET') || 'fallback-secret',
+                    secret: (0, auth_cookie_util_1.getJwtSecret)(configService),
                 }),
             }),
             premium_module_1.PremiumModule,

@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { parseAllowedOrigins } from '../config/cors.config';
 
 @Injectable()
 export class EmailService {
   private transporter: nodemailer.Transporter;
+  private frontendAppUrl: string;
 
   constructor(private configService: ConfigService) {
     // For now, since we don't have SMTP settings, we can use a mock approach or log to console
@@ -29,10 +31,17 @@ export class EmailService {
         '--- EMAIL SERVICE: No SMTP config found. MOCK MODE ACTIVE. ---',
       );
     }
+
+    this.frontendAppUrl = String(
+      this.configService.get<string>('FRONTEND_APP_URL') ||
+        this.configService.get<string>('APP_CLIENT_URL') ||
+        parseAllowedOrigins(this.configService.get<string>('CORS_ORIGINS'))[0] ||
+        '',
+    ).replace(/\/+$/, '');
   }
 
   async sendVerificationEmail(email: string, token: string) {
-    const verificationUrl = `http://localhost:5173/login?verify_token=${token}`;
+    const verificationUrl = `${this.frontendAppUrl}/login?verify_token=${token}`;
     const mailOptions = {
       from: '"Jamm" <no-reply@jamm.uz>',
       to: email,

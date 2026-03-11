@@ -1,7 +1,7 @@
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import { UserDocument } from '../users/schemas/user.schema';
-import { PromoCodeDocument } from './schemas/promo-code.schema';
+import { PromoCode, PromoCodeDocument } from './schemas/promo-code.schema';
 import { PremiumPlan, PremiumPlanDocument } from './schemas/premium-plan.schema';
 import { SubscriptionDocument } from './schemas/subscription.schema';
 import { RedisPresenceService } from '../presence/redis-presence.service';
@@ -18,6 +18,19 @@ export declare class PremiumService {
     onModuleInit(): Promise<void>;
     private seedPlans;
     private hashPromoCode;
+    createPromoCode(payload: {
+        code: string;
+        validFrom: Date;
+        validUntil: Date;
+        maxUses?: number | null;
+        isActive?: boolean;
+    }): Promise<import("mongoose").Document<unknown, {}, PromoCodeDocument, {}, import("mongoose").DefaultSchemaOptions> & PromoCode & import("mongoose").Document<Types.ObjectId, any, any, Record<string, any>, {}> & Required<{
+        _id: Types.ObjectId;
+    }> & {
+        __v: number;
+    } & {
+        id: string;
+    }>;
     redeemPromo(userId: string, code: string): Promise<{
         success: boolean;
         expiresAt: Date;

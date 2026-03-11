@@ -14,10 +14,13 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { WsJwtGuard } from '../presence/guards/ws-jwt.guard';
 import { ChatsService } from './chats.service';
+import { getAllowedOrigins } from '../common/config/cors.config';
+import { verifySocketToken } from '../common/auth/ws-auth.util';
+import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 
 @WebSocketGateway({
   namespace: '/chats',
-  cors: { origin: true, credentials: true },
+  cors: { origin: getAllowedOrigins(), credentials: true },
 })
 export class ChatsGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -26,6 +29,7 @@ export class ChatsGateway
   server: Server;
 
   private readonly logger = new Logger(ChatsGateway.name);
+  private readonly rateLimiter = new SocketRateLimiter();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -40,18 +44,15 @@ export class ChatsGateway
 
   async handleConnection(client: Socket) {
     try {
-      const token =
-        client.handshake?.auth?.token ||
-        (client.handshake?.query?.token as string);
+      const payload = await verifySocketToken(
+        this.jwtService,
+        this.configService,
+        client,
+      );
 
-      if (!token) {
+      if (!payload) {
         throw new Error('Authentication token missing');
       }
-
-      const secret =
-        this.configService.get<string>('JWT_SECRET') || 'fallback-secret';
-
-      const payload = await this.jwtService.verifyAsync(token, { secret });
 
       client.data.user = {
         _id: payload.sub,
@@ -82,6 +83,7 @@ export class ChatsGateway
     @MessageBody() data: { chatId: string },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`join_chat:${client.id}`, 20, 60_000);
     const room = `chat_${data.chatId}`;
     client.join(room);
     this.logger.debug(`Client ${client.id} joined room ${room}`);
@@ -94,6 +96,7 @@ export class ChatsGateway
     @MessageBody() data: { chatId: string },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`leave_chat:${client.id}`, 30, 60_000);
     const room = `chat_${data.chatId}`;
     client.leave(room);
     this.logger.debug(`Client ${client.id} left room ${room}`);
@@ -106,6 +109,7 @@ export class ChatsGateway
     @MessageBody() data: { chatId: string; messageIds: string[] },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`read_messages:${client.id}`, 60, 60_000);
     if (!data.chatId || !data.messageIds || data.messageIds.length === 0) {
       return { success: false };
     }
@@ -124,6 +128,7 @@ export class ChatsGateway
     @MessageBody() data: { chatId: string },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`typing:${client.id}`, 120, 60_000);
     const userId = client.data.user._id;
     client.to(`chat_${data.chatId}`).emit('user_typing', {
       chatId: data.chatId,
@@ -138,6 +143,7 @@ export class ChatsGateway
     @MessageBody() data: { chatId: string },
     @ConnectedSocket() client: Socket,
   ) {
+    this.rateLimiter.take(`typing:${client.id}`, 120, 60_000);
     const userId = client.data.user._id;
     client.to(`chat_${data.chatId}`).emit('user_typing', {
       chatId: data.chatId,

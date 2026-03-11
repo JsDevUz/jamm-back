@@ -26,62 +26,20 @@ export class Post {
   @Prop({ default: 0 })
   keyVersion: number;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
-  likes: Types.ObjectId[];
+  @Prop({ default: 0 })
+  likesCount: number;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
-  views: Types.ObjectId[];
+  @Prop({ default: 0 })
+  viewsCount: number;
 
-  @Prop({
-    type: [
-      {
-        userId: { type: Types.ObjectId, ref: 'User' },
-        content: String,
-        iv: { type: String, default: '' },
-        authTag: { type: String, default: '' },
-        isEncrypted: { type: Boolean, default: false },
-        keyVersion: { type: Number, default: 0 },
-        createdAt: { type: Date, default: Date.now },
-        replies: [
-          {
-            userId: { type: Types.ObjectId, ref: 'User' },
-            content: String,
-            replyToUser: String,
-            iv: { type: String, default: '' },
-            authTag: { type: String, default: '' },
-            isEncrypted: { type: Boolean, default: false },
-            keyVersion: { type: Number, default: 0 },
-            createdAt: { type: Date, default: Date.now },
-          },
-        ],
-      },
-    ],
-    default: [],
-  })
-  comments: {
-    _id?: Types.ObjectId;
-    userId: Types.ObjectId;
-    content: string;
-    iv: string;
-    authTag: string;
-    isEncrypted: boolean;
-    keyVersion: number;
-    createdAt: Date;
-    replies?: {
-      _id?: Types.ObjectId;
-      userId: Types.ObjectId;
-      content: string;
-      replyToUser: string;
-      iv: string;
-      authTag: string;
-      isEncrypted: boolean;
-      keyVersion: number;
-      createdAt: Date;
-    }[];
-  }[];
+  @Prop({ default: 0 })
+  commentsCount: number;
 
   @Prop({ default: false })
   isDeleted: boolean;
 }
 
 export const PostSchema = SchemaFactory.createForClass(Post);
+PostSchema.index({ isDeleted: 1, createdAt: -1 });
+PostSchema.index({ author: 1, isDeleted: 1, createdAt: -1 });
+PostSchema.index({ isDeleted: 1, likesCount: -1, createdAt: -1 });

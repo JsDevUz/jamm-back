@@ -1,11 +1,16 @@
 import { UsersService } from './users.service';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AppSettingsService } from '../app-settings/app-settings.service';
+import { UpdateProfileDecorationDto } from './dto/profile-decoration.dto';
+import { UploadValidationService } from '../common/uploads/upload-validation.service';
 export declare class UsersController {
     private readonly usersService;
-    constructor(usersService: UsersService);
+    private readonly appSettingsService;
+    private readonly uploadValidationService;
+    constructor(usersService: UsersService, appSettingsService: AppSettingsService, uploadValidationService: UploadValidationService);
     private sanitizeUser;
-    uploadAvatar(req: any, file: Express.Multer.File): Promise<{
+    uploadAvatar(req: any, file: Express.Multer.File): Promise<({
         _id: any;
         jammId: any;
         username: any;
@@ -15,6 +20,8 @@ export declare class UsersController {
         bio: any;
         gender: any;
         age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
         interests: any;
         goals: any;
         level: any;
@@ -23,8 +30,15 @@ export declare class UsersController {
         isOnboardingCompleted: any;
         isVerified: any;
         createdAt: any;
-    } | null>;
-    getMe(req: any): Promise<{
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null>;
+    getMe(req: any): Promise<({
         _id: any;
         jammId: any;
         username: any;
@@ -34,6 +48,8 @@ export declare class UsersController {
         bio: any;
         gender: any;
         age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
         interests: any;
         goals: any;
         level: any;
@@ -42,8 +58,15 @@ export declare class UsersController {
         isOnboardingCompleted: any;
         isVerified: any;
         createdAt: any;
-    } | null>;
-    updateMe(req: any, body: UpdateProfileDto): Promise<{
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null>;
+    updateMe(req: any, body: UpdateProfileDto): Promise<({
         _id: any;
         jammId: any;
         username: any;
@@ -53,6 +76,8 @@ export declare class UsersController {
         bio: any;
         gender: any;
         age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
         interests: any;
         goals: any;
         level: any;
@@ -61,10 +86,20 @@ export declare class UsersController {
         isOnboardingCompleted: any;
         isVerified: any;
         createdAt: any;
-    } | null>;
-    getAllUsers(req: any): Promise<import("./schemas/user.schema").UserDocument[]>;
-    searchUsers(query: string, req: any): Promise<import("./schemas/user.schema").UserDocument[]>;
-    searchGlobal(query: string, req: any): Promise<({
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null>;
+    getProfileDecorations(): Promise<(import("./schemas/profile-decoration.schema").ProfileDecoration & import("mongoose").Document<import("mongoose").Types.ObjectId, any, any, Record<string, any>, {}> & Required<{
+        _id: import("mongoose").Types.ObjectId;
+    }> & {
+        __v: number;
+    })[]>;
+    updateProfileDecoration(req: any, body: UpdateProfileDecorationDto): Promise<({
         _id: any;
         jammId: any;
         username: any;
@@ -74,6 +109,8 @@ export declare class UsersController {
         bio: any;
         gender: any;
         age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
         interests: any;
         goals: any;
         level: any;
@@ -82,7 +119,72 @@ export declare class UsersController {
         isOnboardingCompleted: any;
         isVerified: any;
         createdAt: any;
-    } | null)[]>;
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null>;
+    uploadProfileDecorationImage(req: any, file: Express.Multer.File): Promise<({
+        _id: any;
+        jammId: any;
+        username: any;
+        nickname: any;
+        avatar: any;
+        phone: any;
+        bio: any;
+        gender: any;
+        age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
+        interests: any;
+        goals: any;
+        level: any;
+        premiumStatus: any;
+        premiumExpiresAt: any;
+        isOnboardingCompleted: any;
+        isVerified: any;
+        createdAt: any;
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null>;
+    getAllUsers(req: any): Promise<any[]>;
+    searchUsers(query: string, req: any): Promise<any[]>;
+    searchGlobal(query: string, req: any): Promise<(({
+        _id: any;
+        jammId: any;
+        username: any;
+        nickname: any;
+        avatar: any;
+        phone: any;
+        bio: any;
+        gender: any;
+        age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
+        interests: any;
+        goals: any;
+        level: any;
+        premiumStatus: any;
+        premiumExpiresAt: any;
+        isOnboardingCompleted: any;
+        isVerified: any;
+        createdAt: any;
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null)[]>;
     getUserByUsername(username: string): Promise<any>;
     toggleFollow(req: any, id: string): Promise<{
         following: boolean;
@@ -92,7 +194,7 @@ export declare class UsersController {
     checkUsername(req: any, username: string): Promise<{
         available: boolean;
     }>;
-    completeOnboarding(req: any, body: CompleteOnboardingDto): Promise<{
+    completeOnboarding(req: any, body: CompleteOnboardingDto): Promise<({
         _id: any;
         jammId: any;
         username: any;
@@ -102,6 +204,8 @@ export declare class UsersController {
         bio: any;
         gender: any;
         age: any;
+        selectedProfileDecorationId: any;
+        customProfileDecorationImage: any;
         interests: any;
         goals: any;
         level: any;
@@ -110,5 +214,12 @@ export declare class UsersController {
         isOnboardingCompleted: any;
         isVerified: any;
         createdAt: any;
-    } | null>;
+    } & {
+        isOfficialProfile: boolean;
+        officialBadgeKey: string | null;
+        officialBadgeLabel: string | null;
+        hidePresence: boolean;
+        disableCalls: boolean;
+        disableGroupInvites: boolean;
+    }) | null>;
 }

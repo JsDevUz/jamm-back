@@ -21,12 +21,16 @@ const jwt_1 = require("@nestjs/jwt");
 const config_1 = require("@nestjs/config");
 const ws_jwt_guard_1 = require("../presence/guards/ws-jwt.guard");
 const chats_service_1 = require("./chats.service");
+const cors_config_1 = require("../common/config/cors.config");
+const ws_auth_util_1 = require("../common/auth/ws-auth.util");
+const socket_rate_limiter_1 = require("../common/ws/socket-rate-limiter");
 let ChatsGateway = ChatsGateway_1 = class ChatsGateway {
     jwtService;
     configService;
     chatsService;
     server;
     logger = new common_1.Logger(ChatsGateway_1.name);
+    rateLimiter = new socket_rate_limiter_1.SocketRateLimiter();
     constructor(jwtService, configService, chatsService) {
         this.jwtService = jwtService;
         this.configService = configService;
@@ -37,13 +41,10 @@ let ChatsGateway = ChatsGateway_1 = class ChatsGateway {
     }
     async handleConnection(client) {
         try {
-            const token = client.handshake?.auth?.token ||
-                client.handshake?.query?.token;
-            if (!token) {
+            const payload = await (0, ws_auth_util_1.verifySocketToken)(this.jwtService, this.configService, client);
+            if (!payload) {
                 throw new Error('Authentication token missing');
             }
-            const secret = this.configService.get('JWT_SECRET') || 'fallback-secret';
-            const payload = await this.jwtService.verifyAsync(token, { secret });
             client.data.user = {
                 _id: payload.sub,
                 email: payload.email,
@@ -60,18 +61,21 @@ let ChatsGateway = ChatsGateway_1 = class ChatsGateway {
         this.logger.debug(`Client disconnected from /chats: ${client.id}`);
     }
     handleJoinChat(data, client) {
+        this.rateLimiter.take(`join_chat:${client.id}`, 20, 60_000);
         const room = `chat_${data.chatId}`;
         client.join(room);
         this.logger.debug(`Client ${client.id} joined room ${room}`);
         return { success: true, room };
     }
     handleLeaveChat(data, client) {
+        this.rateLimiter.take(`leave_chat:${client.id}`, 30, 60_000);
         const room = `chat_${data.chatId}`;
         client.leave(room);
         this.logger.debug(`Client ${client.id} left room ${room}`);
         return { success: true, room };
     }
     async handleReadMessages(data, client) {
+        this.rateLimiter.take(`read_messages:${client.id}`, 60, 60_000);
         if (!data.chatId || !data.messageIds || data.messageIds.length === 0) {
             return { success: false };
         }
@@ -80,6 +84,7 @@ let ChatsGateway = ChatsGateway_1 = class ChatsGateway {
         return { success: true };
     }
     handleTypingStart(data, client) {
+        this.rateLimiter.take(`typing:${client.id}`, 120, 60_000);
         const userId = client.data.user._id;
         client.to(`chat_${data.chatId}`).emit('user_typing', {
             chatId: data.chatId,
@@ -88,6 +93,7 @@ let ChatsGateway = ChatsGateway_1 = class ChatsGateway {
         });
     }
     handleTypingStop(data, client) {
+        this.rateLimiter.take(`typing:${client.id}`, 120, 60_000);
         const userId = client.data.user._id;
         client.to(`chat_${data.chatId}`).emit('user_typing', {
             chatId: data.chatId,
@@ -149,7 +155,7 @@ __decorate([
 exports.ChatsGateway = ChatsGateway = ChatsGateway_1 = __decorate([
     (0, websockets_1.WebSocketGateway)({
         namespace: '/chats',
-        cors: { origin: true, credentials: true },
+        cors: { origin: (0, cors_config_1.getAllowedOrigins)(), credentials: true },
     }),
     __param(2, (0, common_1.Inject)((0, common_1.forwardRef)(() => chats_service_1.ChatsService))),
     __metadata("design:paramtypes", [jwt_1.JwtService,

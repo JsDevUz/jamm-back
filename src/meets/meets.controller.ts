@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { MeetsService } from './meets.service.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
+import { CreateMeetDto } from './dto/create-meet.dto';
 
 @Controller('meets')
 @UseGuards(JwtAuthGuard)
@@ -19,7 +20,7 @@ export class MeetsController {
   @Post()
   async createMeet(
     @Req() req,
-    @Body() body: { roomId: string; title: string; isPrivate: boolean },
+    @Body() body: CreateMeetDto,
   ) {
     return this.meetsService.create({
       roomId: body.roomId,

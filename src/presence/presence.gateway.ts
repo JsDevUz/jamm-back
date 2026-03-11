@@ -21,6 +21,10 @@ import { WsJwtGuard } from './guards/ws-jwt.guard';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { AppSettingsService } from '../app-settings/app-settings.service';
+import { getAllowedOrigins } from '../common/config/cors.config';
+import { verifySocketToken } from '../common/auth/ws-auth.util';
+import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 
 /**
  * PresenceGateway — manages online/offline presence via WebSocket.
@@ -38,7 +42,7 @@ import { ConfigService } from '@nestjs/config';
 @WebSocketGateway({
   namespace: '/presence',
   cors: {
-    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    origin: getAllowedOrigins(),
     credentials: true,
   },
 })
@@ -49,12 +53,14 @@ export class PresenceGateway
   server: Server;
 
   private readonly logger = new Logger(PresenceGateway.name);
+  private readonly rateLimiter = new SocketRateLimiter();
 
   constructor(
     private readonly redisPresence: RedisPresenceService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    private readonly appSettingsService: AppSettingsService,
   ) {}
 
   /**
@@ -85,26 +91,40 @@ export class PresenceGateway
    */
   async handleConnection(client: Socket) {
     try {
-      const token =
-        client.handshake?.auth?.token ||
-        (client.handshake?.query?.token as string);
+      const payload = await verifySocketToken(
+        this.jwtService,
+        this.configService,
+        client,
+      );
 
-      if (!token) {
+      if (!payload) {
         this.logger.warn(`Rejected unauthenticated connection: ${client.id}`);
         client.disconnect(true);
         return;
       }
 
-      const secret =
-        this.configService.get<string>('JWT_SECRET') || 'fallback-secret';
-      const payload = await this.jwtService.verifyAsync(token, { secret });
       const userId = payload.sub;
+      const user = await this.userModel
+        .findById(userId)
+        .select('username')
+        .lean()
+        .exec();
+      const officialProfile =
+        await this.appSettingsService.getOfficialProfileByUsername(
+          user?.username,
+        );
 
       // Attach user data to the socket
       client.data.user = { _id: userId, email: payload.email };
+      client.data.isOfficialProfile = Boolean(officialProfile?.hidePresence);
 
       // Join a user-specific room (for targeted messaging)
       client.join(`user:${userId}`);
+
+      if (officialProfile?.hidePresence) {
+        this.logger.log(`Official profile ${userId} connected silently`);
+        return;
+      }
 
       // Mark online in Redis
       const deviceCount = await this.redisPresence.setOnline(userId);
@@ -125,6 +145,7 @@ export class PresenceGateway
   async handleDisconnect(client: Socket) {
     const userId = client.data?.user?._id;
     if (!userId) return;
+    if (client.data?.isOfficialProfile) return;
 
     try {
       const remainingDevices = await this.redisPresence.removeDevice(userId);
@@ -155,6 +176,10 @@ export class PresenceGateway
   async handleHeartbeat(@ConnectedSocket() client: Socket) {
     const userId = client.data?.user?._id;
     if (!userId) return;
+    this.rateLimiter.take(`presence:ping:${client.id}`, 240, 60_000);
+    if (client.data?.isOfficialProfile) {
+      return { event: 'presence:pong', data: { status: 'ok' } };
+    }
 
     await this.redisPresence.refreshTTL(userId);
     return { event: 'presence:pong', data: { status: 'ok' } };
@@ -169,6 +194,7 @@ export class PresenceGateway
     @MessageBody()
     data: { toUserId: string; roomId: string; callType?: string },
   ) {
+    this.rateLimiter.take(`presence:call-request:${client.id}`, 15, 60_000);
     const fromUserId = client.data.user._id;
     const { toUserId, roomId, callType = 'video' } = data;
 
@@ -181,6 +207,24 @@ export class PresenceGateway
       .findById(fromUserId)
       .select('nickname username avatar')
       .lean();
+
+    const targetUser = await this.userModel
+      .findById(toUserId)
+      .select('username')
+      .lean()
+      .exec();
+    const officialProfile =
+      await this.appSettingsService.getOfficialProfileByUsername(
+        targetUser?.username,
+      );
+    if (officialProfile?.disableCalls) {
+      this.server.to(`user:${fromUserId}`).emit('call:rejected', {
+        fromUserId: toUserId,
+        roomId,
+        reason: 'official-profile',
+      });
+      return;
+    }
 
     this.server.to(`user:${toUserId}`).emit('call:incoming', {
       fromUser: {
@@ -199,6 +243,7 @@ export class PresenceGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { toUserId: string; roomId: string },
   ) {
+    this.rateLimiter.take(`presence:call-respond:${client.id}`, 30, 60_000);
     const fromUserId = client.data.user._id;
     this.server.to(`user:${data.toUserId}`).emit('call:accepted', {
       fromUserId,
@@ -212,6 +257,7 @@ export class PresenceGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { toUserId: string; roomId: string; reason?: string },
   ) {
+    this.rateLimiter.take(`presence:call-respond:${client.id}`, 30, 60_000);
     const fromUserId = client.data.user._id;
     this.server.to(`user:${data.toUserId}`).emit('call:rejected', {
       fromUserId,
@@ -226,6 +272,7 @@ export class PresenceGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { toUserId: string; roomId: string },
   ) {
+    this.rateLimiter.take(`presence:call-cancel:${client.id}`, 30, 60_000);
     const fromUserId = client.data.user._id;
     this.server.to(`user:${data.toUserId}`).emit('call:cancelled', {
       fromUserId,

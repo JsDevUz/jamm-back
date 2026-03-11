@@ -387,6 +387,26 @@ export class ArenaController {
     );
   }
 
+  /* ---- MNEMONICS ---- */
+
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get('mnemonics/leaderboard')
+  getMnemonicLeaderboard(@Request() req, @Query('mode') mode?: string) {
+    return this.arenaService.getMnemonicLeaderboard(
+      String(mode || 'digits'),
+      req.user?._id?.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('mnemonics/result')
+  saveMnemonicBestResult(@Request() req, @Body() body: any) {
+    return this.arenaService.saveMnemonicBestResult(
+      req.user._id.toString(),
+      body,
+    );
+  }
+
   /* ---- BATTLES ---- */
 
   @UseGuards(OptionalJwtAuthGuard)

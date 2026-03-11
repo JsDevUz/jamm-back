@@ -12,32 +12,46 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BlogsService } from './blogs.service';
+import {
+  BlogCommentDto,
+  BlogReplyDto,
+  UpsertBlogDto,
+} from './dto/blog.dto';
+import { UploadValidationService } from '../common/uploads/upload-validation.service';
+import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
 @Controller('blogs')
 @UseGuards(JwtAuthGuard)
 export class BlogsController {
-  constructor(private readonly blogsService: BlogsService) {}
+  constructor(
+    private readonly blogsService: BlogsService,
+    private readonly uploadValidationService: UploadValidationService,
+  ) {}
 
   @Post('upload-image')
-  @UseInterceptors(FileInterceptor('file'))
-  uploadImage(@UploadedFile() file: Express.Multer.File) {
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.homeworkPhotoBytes),
+    ),
+  )
+  async uploadImage(@UploadedFile() file: Express.Multer.File) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      label: 'Blog rasmi',
+    });
     return this.blogsService.uploadImage(file);
   }
 
   @Post()
   createBlog(
     @Request() req,
-    @Body()
-    body: {
-      title: string;
-      markdown: string;
-      excerpt?: string;
-      coverImage?: string;
-      tags?: string[];
-    },
+    @Body() body: UpsertBlogDto,
   ) {
     return this.blogsService.createBlog(req.user._id.toString(), body);
   }
@@ -46,14 +60,7 @@ export class BlogsController {
   updateBlog(
     @Request() req,
     @Param('id') id: string,
-    @Body()
-    body: {
-      title: string;
-      markdown: string;
-      excerpt?: string;
-      coverImage?: string;
-      tags?: string[];
-    },
+    @Body() body: UpsertBlogDto,
   ) {
     return this.blogsService.updateBlog(id, req.user._id.toString(), body);
   }
@@ -116,7 +123,7 @@ export class BlogsController {
   addComment(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: { content: string },
+    @Body() body: BlogCommentDto,
   ) {
     return this.blogsService.addComment(
       id,
@@ -130,7 +137,7 @@ export class BlogsController {
     @Request() req,
     @Param('id') id: string,
     @Param('commentId') commentId: string,
-    @Body() body: { content: string; replyToUser?: string },
+    @Body() body: BlogReplyDto,
   ) {
     return this.blogsService.addReply(
       id,

@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { generateShortSlug } from '../../common/utils/generate-short-slug';
 
 export type BlogDocument = Blog & Document;
 
@@ -11,7 +12,12 @@ export class Blog {
   @Prop({ required: true, trim: true })
   title: string;
 
-  @Prop({ required: true, trim: true, unique: true })
+  @Prop({
+    required: true,
+    trim: true,
+    unique: true,
+    default: () => generateShortSlug(8),
+  })
   slug: string;
 
   @Prop({ default: '' })
@@ -26,43 +32,14 @@ export class Blog {
   @Prop({ type: [String], default: [] })
   tags: string[];
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
-  likes: Types.ObjectId[];
+  @Prop({ default: 0 })
+  likesCount: number;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
-  views: Types.ObjectId[];
+  @Prop({ default: 0 })
+  viewsCount: number;
 
-  @Prop({
-    type: [
-      {
-        userId: { type: Types.ObjectId, ref: 'User', required: true },
-        content: { type: String, required: true },
-        createdAt: { type: Date, default: Date.now },
-        replies: [
-          {
-            userId: { type: Types.ObjectId, ref: 'User', required: true },
-            content: { type: String, required: true },
-            replyToUser: { type: String, default: '' },
-            createdAt: { type: Date, default: Date.now },
-          },
-        ],
-      },
-    ],
-    default: [],
-  })
-  comments: {
-    _id?: Types.ObjectId;
-    userId: Types.ObjectId;
-    content: string;
-    createdAt: Date;
-    replies?: {
-      _id?: Types.ObjectId;
-      userId: Types.ObjectId;
-      content: string;
-      replyToUser: string;
-      createdAt: Date;
-    }[];
-  }[];
+  @Prop({ default: 0 })
+  commentsCount: number;
 
   @Prop({ type: Date, default: Date.now })
   publishedAt: Date;
@@ -72,3 +49,6 @@ export class Blog {
 }
 
 export const BlogSchema = SchemaFactory.createForClass(Blog);
+BlogSchema.index({ isDeleted: 1, publishedAt: -1, createdAt: -1 });
+BlogSchema.index({ author: 1, isDeleted: 1, publishedAt: -1, createdAt: -1 });
+BlogSchema.index({ isDeleted: 1, likesCount: -1, publishedAt: -1, createdAt: -1 });

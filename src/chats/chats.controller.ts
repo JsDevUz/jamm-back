@@ -14,13 +14,28 @@ import {
   UploadedFile,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ChatsService } from './chats.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  CreateChatDto,
+  EditChatDto,
+  EditMessageDto,
+  RequestJoinCallDto,
+  RespondJoinRequestDto,
+  SendMessageDto,
+} from './dto/chat.dto';
+import { UploadValidationService } from '../common/uploads/upload-validation.service';
+import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
 @Controller('chats')
 export class ChatsController {
-  constructor(private readonly chatsService: ChatsService) {}
+  constructor(
+    private readonly chatsService: ChatsService,
+    private readonly uploadValidationService: UploadValidationService,
+  ) {}
 
   @UseGuards(JwtAuthGuard)
   @Get()
@@ -39,14 +54,7 @@ export class ChatsController {
   @Post()
   createChat(
     @Request() req,
-    @Body()
-    dto: {
-      isGroup: boolean;
-      name?: string;
-      description?: string;
-      avatar?: string;
-      memberIds: string[];
-    },
+    @Body() dto: CreateChatDto,
   ) {
     return this.chatsService.createChat(req.user._id.toString(), dto);
   }
@@ -64,6 +72,34 @@ export class ChatsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get('search/users')
+  searchPrivateUsers(
+    @Request() req,
+    @Query('q') query?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.chatsService.searchPrivateUsers(
+      req.user._id.toString(),
+      query || '',
+      Number(limit) || 10,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('search/groups')
+  searchGroups(
+    @Request() req,
+    @Query('q') query?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.chatsService.searchUserGroups(
+      req.user._id.toString(),
+      query || '',
+      Number(limit) || 10,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
   getChat(@Request() req, @Param('id') id: string) {
     return this.chatsService.getChat(id, req.user._id.toString());
@@ -74,13 +110,13 @@ export class ChatsController {
   getChatMessages(
     @Request() req,
     @Param('id') id: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query('before') before?: string,
   ) {
-    return this.chatsService.getChatMessages(id, req.user._id.toString(), {
-      page: Number(page) || 1,
-      limit: Number(limit) || 30,
-    });
+    return this.chatsService.getChatMessages(
+      id,
+      req.user._id.toString(),
+      before,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -88,7 +124,7 @@ export class ChatsController {
   sendMessage(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: { content: string; replayToId?: string },
+    @Body() body: SendMessageDto,
   ) {
     return this.chatsService.sendMessage(
       id,
@@ -103,7 +139,7 @@ export class ChatsController {
   editMessage(
     @Request() req,
     @Param('messageId') messageId: string,
-    @Body() body: { content: string },
+    @Body() body: EditMessageDto,
   ) {
     return this.chatsService.editMessage(
       messageId,
@@ -129,36 +165,47 @@ export class ChatsController {
   editChat(
     @Request() req,
     @Param('id') id: string,
-    @Body()
-    body: {
-      name?: string;
-      description?: string;
-      avatar?: string;
-      members?: string[];
-      admins?: { userId: string; permissions: string[] }[];
-    },
+    @Body() body: EditChatDto,
   ) {
     return this.chatsService.editChat(id, req.user._id.toString(), body);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('upload-avatar')
-  @UseInterceptors(FileInterceptor('file'))
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.homeworkPhotoBytes),
+    ),
+  )
   async uploadGroupAvatarOnly(
     @Request() req,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      label: 'Guruh rasmi',
+    });
     return this.chatsService.uploadGroupAvatarOnly(file);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post(':id/avatar')
-  @UseInterceptors(FileInterceptor('file'))
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.homeworkPhotoBytes),
+    ),
+  )
   async uploadAvatar(
     @Request() req,
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      label: 'Chat rasmi',
+    });
     return this.chatsService.updateAvatar(id, req.user._id.toString(), file);
   }
 
@@ -186,7 +233,7 @@ export class ChatsController {
   @Post(':id/call/join')
   requestJoin(
     @Param('id') id: string,
-    @Body() body: { name: string; userId?: string },
+    @Body() body: RequestJoinCallDto,
   ) {
     return this.chatsService.requestJoin(id, body.name, body.userId);
   }
@@ -212,7 +259,7 @@ export class ChatsController {
     @Request() req,
     @Param('id') id: string,
     @Param('requestId') requestId: string,
-    @Body() body: { approved: boolean },
+    @Body() body: RespondJoinRequestDto,
   ) {
     return this.chatsService.respondToJoinRequest(
       id,

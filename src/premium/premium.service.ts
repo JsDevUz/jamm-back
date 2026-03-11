@@ -77,9 +77,46 @@ export class PremiumService {
   }
 
   private hashPromoCode(code: string): string {
-    const salt =
-      this.configService.get<string>('PROMO_SALT') || 'default-promo-salt-!!';
+    const salt = this.configService.get<string>('PROMO_SALT');
+    if (!salt) {
+      throw new Error('PROMO_SALT env is required');
+    }
     return crypto.createHmac('sha256', salt).update(code).digest('hex');
+  }
+
+  async createPromoCode(payload: {
+    code: string;
+    validFrom: Date;
+    validUntil: Date;
+    maxUses?: number | null;
+    isActive?: boolean;
+  }) {
+    const displayCode = String(payload.code || '')
+      .trim()
+      .toUpperCase();
+    if (!displayCode) {
+      throw new BadRequestException('Promo code is required');
+    }
+
+    const existing = await this.promoCodeModel
+      .findOne({ displayCode })
+      .select('_id')
+      .lean();
+    if (existing) {
+      throw new BadRequestException('Promo code already exists');
+    }
+
+    const hashedCode = this.hashPromoCode(displayCode);
+    return this.promoCodeModel.create({
+      displayCode,
+      code: hashedCode,
+      validFrom: payload.validFrom,
+      validUntil: payload.validUntil,
+      isActive: payload.isActive ?? true,
+      ...(payload.maxUses === undefined || payload.maxUses === null
+        ? {}
+        : { maxUses: payload.maxUses }),
+    });
   }
 
   async redeemPromo(

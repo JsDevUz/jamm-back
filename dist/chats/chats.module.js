@@ -21,6 +21,8 @@ const presence_module_1 = require("../presence/presence.module");
 const r2_service_1 = require("../common/services/r2.service");
 const encryption_module_1 = require("../common/encryption/encryption.module");
 const premium_module_1 = require("../premium/premium.module");
+const app_settings_module_1 = require("../app-settings/app-settings.module");
+const auth_cookie_util_1 = require("../auth/auth-cookie.util");
 let ChatsModule = class ChatsModule {
 };
 exports.ChatsModule = ChatsModule;
@@ -37,12 +39,13 @@ exports.ChatsModule = ChatsModule = __decorate([
                 imports: [config_1.ConfigModule],
                 inject: [config_1.ConfigService],
                 useFactory: (configService) => ({
-                    secret: configService.get('JWT_SECRET') || 'fallback-secret',
+                    secret: (0, auth_cookie_util_1.getJwtSecret)(configService),
                 }),
             }),
             (0, common_1.forwardRef)(() => presence_module_1.PresenceModule),
             encryption_module_1.EncryptionModule,
             premium_module_1.PremiumModule,
+            app_settings_module_1.AppSettingsModule,
         ],
         providers: [chats_service_1.ChatsService, chats_gateway_1.ChatsGateway, r2_service_1.R2Service],
         controllers: [chats_controller_1.ChatsController],

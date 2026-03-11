@@ -9,6 +9,7 @@ export declare class VideoGateway implements OnGatewayConnection, OnGatewayDisco
     private readonly premiumService;
     server: Server;
     private rooms;
+    private readonly rateLimiter;
     constructor(jwtService: JwtService, configService: ConfigService, premiumService: PremiumService);
     handleConnection(client: Socket): Promise<void>;
     handleDisconnect(client: Socket): void;

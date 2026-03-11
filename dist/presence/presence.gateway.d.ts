@@ -5,14 +5,17 @@ import { RedisPresenceService } from './redis-presence.service';
 import { UserDocument } from '../users/schemas/user.schema';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 export declare class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
     private readonly redisPresence;
     private readonly jwtService;
     private readonly configService;
     private readonly userModel;
+    private readonly appSettingsService;
     server: Server;
     private readonly logger;
-    constructor(redisPresence: RedisPresenceService, jwtService: JwtService, configService: ConfigService, userModel: Model<UserDocument>);
+    private readonly rateLimiter;
+    constructor(redisPresence: RedisPresenceService, jwtService: JwtService, configService: ConfigService, userModel: Model<UserDocument>, appSettingsService: AppSettingsService);
     afterInit(): Promise<void>;
     handleConnection(client: Socket): Promise<void>;
     handleDisconnect(client: Socket): Promise<void>;

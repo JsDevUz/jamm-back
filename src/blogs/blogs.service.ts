@@ -3,10 +3,16 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Blog, BlogDocument } from './schemas/blog.schema';
+import { BlogComment, BlogCommentDocument } from './schemas/blog-comment.schema';
+import {
+  BlogEngagement,
+  BlogEngagementDocument,
+} from './schemas/blog-engagement.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { R2Service } from '../common/services/r2.service';
 import {
@@ -17,6 +23,10 @@ import {
   countWords,
   getTierLimit,
 } from '../common/limits/app-limits';
+import {
+  generateShortSlug,
+  sanitizeCustomSlug,
+} from '../common/utils/generate-short-slug';
 
 type BlogPayload = {
   title: string;
@@ -27,9 +37,13 @@ type BlogPayload = {
 };
 
 @Injectable()
-export class BlogsService {
+export class BlogsService implements OnModuleInit {
   constructor(
     @InjectModel(Blog.name) private blogModel: Model<BlogDocument>,
+    @InjectModel(BlogComment.name)
+    private blogCommentModel: Model<BlogCommentDocument>,
+    @InjectModel(BlogEngagement.name)
+    private blogEngagementModel: Model<BlogEngagementDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private r2Service: R2Service,
   ) {}
@@ -40,7 +54,9 @@ export class BlogsService {
     if (isJammId) {
       const user = await this.userModel
         .findOne({ jammId: Number(identifier) })
-        .select('_id');
+        .select('_id')
+        .lean()
+        .exec();
 
       return user?._id || null;
     }
@@ -99,18 +115,12 @@ export class BlogsService {
     };
   }
 
-  private countUserComments(blog: any, userId: string) {
-    return Array.isArray(blog.comments)
-      ? blog.comments.reduce((total: number, comment: any) => {
-          const ownComment = comment.userId?.toString() === userId ? 1 : 0;
-          const ownReplies = Array.isArray(comment.replies)
-            ? comment.replies.filter(
-                (reply: any) => reply.userId?.toString() === userId,
-              ).length
-            : 0;
-          return total + ownComment + ownReplies;
-        }, 0)
-      : 0;
+  private async countUserComments(blogId: string, userId: string) {
+    return this.blogCommentModel.countDocuments({
+      blogId: new Types.ObjectId(blogId),
+      userId: new Types.ObjectId(userId),
+      isDeleted: false,
+    });
   }
 
   private validateBlogPayload(
@@ -151,50 +161,120 @@ export class BlogsService {
     );
   }
 
-  private collectManagedAssetUrls(markdown: string, coverImage?: string, markdownUrl?: string) {
+  private collectManagedAssetUrls(
+    markdown: string,
+    coverImage?: string,
+    markdownUrl?: string,
+  ) {
     return Array.from(
-      new Set([
-        markdownUrl,
-        coverImage,
-        ...this.extractMarkdownImageUrls(markdown),
-      ]),
+      new Set([markdownUrl, coverImage, ...this.extractMarkdownImageUrls(markdown)]),
     ).filter(
       (url): url is string =>
         typeof url === 'string' && this.r2Service.isManagedFile(url),
     );
   }
 
-  private async buildUniqueSlug(title: string, excludeBlogId?: string) {
-    const base = title
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 80) || 'blog';
+  private isShortSlug(value?: string | null) {
+    return /^[a-z0-9]{8}$/.test(String(value || '').trim());
+  }
 
-    let slug = base;
-    let suffix = 1;
+  private async generateUniqueBlogSlug(
+    preferredSlug?: string,
+    excludeBlogId?: string,
+  ) {
+    const normalizedPreferred = sanitizeCustomSlug(preferredSlug);
+
+    if (normalizedPreferred && this.isShortSlug(normalizedPreferred)) {
+      const existingPreferred = await this.blogModel
+        .findOne({
+          slug: normalizedPreferred,
+          ...(excludeBlogId
+            ? { _id: { $ne: new Types.ObjectId(excludeBlogId) } }
+            : {}),
+        })
+        .select('_id')
+        .lean()
+        .exec();
+
+      if (!existingPreferred) {
+        return normalizedPreferred;
+      }
+    }
 
     while (true) {
-      const existing = await this.blogModel.findOne({
-        slug,
-        isDeleted: false,
-        ...(excludeBlogId
-          ? { _id: { $ne: new Types.ObjectId(excludeBlogId) } }
-          : {}),
-      });
+      const slug = generateShortSlug(8);
+      const existing = await this.blogModel
+        .findOne({
+          slug,
+          ...(excludeBlogId
+            ? { _id: { $ne: new Types.ObjectId(excludeBlogId) } }
+            : {}),
+        })
+        .select('_id')
+        .lean()
+        .exec();
 
-      if (!existing) return slug;
-
-      suffix += 1;
-      slug = `${base}-${suffix}`;
+      if (!existing) {
+        return slug;
+      }
     }
   }
 
-  private formatBlog(blog: any, currentUserId?: string) {
+  async onModuleInit() {
+    const blogs = await this.blogModel.find({}).select('_id slug').exec();
+    const seenSlugs = new Set<string>();
+    let shouldSave = false;
+
+    for (const blog of blogs) {
+      const currentSlug = String(blog.slug || '').trim().toLowerCase();
+      const normalizedSlug = sanitizeCustomSlug(currentSlug);
+      const slugIsReusable =
+        this.isShortSlug(normalizedSlug) && !seenSlugs.has(normalizedSlug);
+
+      if (!slugIsReusable) {
+        blog.slug = await this.generateUniqueBlogSlug(undefined, blog._id.toString());
+        shouldSave = true;
+      }
+
+      seenSlugs.add(String(blog.slug));
+    }
+
+    if (shouldSave) {
+      await Promise.all(blogs.map((blog) => blog.save()));
+    }
+  }
+
+  private async getEngagementMap(blogIds: string[], currentUserId?: string) {
+    if (!currentUserId || !blogIds.length) {
+      return new Map<string, { liked: boolean; viewed: boolean }>();
+    }
+
+    const engagements = await this.blogEngagementModel
+      .find({
+        blogId: { $in: blogIds.map((id) => new Types.ObjectId(id)) },
+        userId: new Types.ObjectId(currentUserId),
+      })
+      .select('blogId liked viewed')
+      .lean()
+      .exec();
+
+    return new Map(
+      engagements.map((item) => [
+        String(item.blogId),
+        {
+          liked: Boolean(item.liked),
+          viewed: Boolean(item.viewed),
+        },
+      ]),
+    );
+  }
+
+  private formatBlog(
+    blog: any,
+    engagementMap?: Map<string, { liked: boolean; viewed: boolean }>,
+  ) {
     const obj = typeof blog.toObject === 'function' ? blog.toObject() : blog;
+    const engagement = engagementMap?.get(String(obj._id));
 
     return {
       _id: obj._id,
@@ -214,14 +294,11 @@ export class BlogsService {
             premiumStatus: obj.author.premiumStatus,
           }
         : obj.author,
-      likes: obj.likes?.length || 0,
-      liked: currentUserId
-        ? (obj.likes || []).some(
-            (id: any) => id.toString() === currentUserId.toString(),
-          )
-        : false,
-      views: obj.views?.length || 0,
-      comments: obj.comments?.length || 0,
+      likes: Number(obj.likesCount || 0),
+      liked: Boolean(engagement?.liked),
+      views: Number(obj.viewsCount || 0),
+      previouslySeen: Boolean(engagement?.viewed),
+      comments: Number(obj.commentsCount || 0),
       publishedAt: obj.publishedAt,
       createdAt: obj.createdAt,
       updatedAt: obj.updatedAt,
@@ -236,13 +313,40 @@ export class BlogsService {
 
     const blog = await this.blogModel
       .findOne({ ...filter, isDeleted: false })
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .exec();
 
     if (!blog) {
       throw new NotFoundException('Blog topilmadi');
     }
 
     return blog;
+  }
+
+  private async resolveCommentUsers(comments: any[]) {
+    const userIds = Array.from(
+      new Set(
+        comments
+          .map((comment) => String(comment.userId || ''))
+          .filter(Boolean),
+      ),
+    );
+    if (!userIds.length) {
+      return new Map<string, any>();
+    }
+
+    const users = await this.userModel
+      .find({ _id: { $in: userIds.map((id) => new Types.ObjectId(id)) } })
+      .select(
+        'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
+
+    return new Map(users.map((user) => [String(user._id), user]));
   }
 
   async uploadImage(file: Express.Multer.File) {
@@ -278,7 +382,7 @@ export class BlogsService {
 
     this.validateBlogPayload(payload, limits);
 
-    const slug = await this.buildUniqueSlug(payload.title);
+    const slug = await this.generateUniqueBlogSlug();
 
     const blog = await this.blogModel.create({
       author: new Types.ObjectId(userId),
@@ -288,6 +392,9 @@ export class BlogsService {
       coverImage: (payload.coverImage || '').trim(),
       markdownUrl: 'pending',
       tags: this.normalizeTags(payload.tags),
+      likesCount: 0,
+      viewsCount: 0,
+      commentsCount: 0,
     });
 
     const markdownKey = this.buildMarkdownKey(userId, blog._id.toString());
@@ -302,9 +409,14 @@ export class BlogsService {
 
     const populated = await this.blogModel
       .findById(blog._id)
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return this.formatBlog(populated, userId);
+    return this.formatBlog(populated);
   }
 
   async updateBlog(blogId: string, userId: string, payload: BlogPayload) {
@@ -338,11 +450,6 @@ export class BlogsService {
       blog.markdownUrl,
     );
 
-    const nextSlug =
-      payload.title.trim() !== blog.title
-        ? await this.buildUniqueSlug(payload.title, blog._id.toString())
-        : blog.slug;
-
     const markdownKey = this.buildMarkdownKey(userId, blog._id.toString());
     const markdownUrl = await this.r2Service.uploadBuffer(
       Buffer.from(payload.markdown, 'utf-8'),
@@ -351,7 +458,7 @@ export class BlogsService {
     );
 
     blog.title = payload.title.trim();
-    blog.slug = nextSlug;
+    blog.slug = blog.slug || (await this.generateUniqueBlogSlug(undefined, blog._id.toString()));
     blog.excerpt = this.buildExcerpt(payload.markdown, payload.excerpt);
     blog.coverImage = (payload.coverImage || '').trim();
     blog.tags = this.normalizeTags(payload.tags);
@@ -359,11 +466,7 @@ export class BlogsService {
     await blog.save();
 
     const nextAssets = new Set(
-      this.collectManagedAssetUrls(
-        payload.markdown,
-        payload.coverImage,
-        markdownUrl,
-      ),
+      this.collectManagedAssetUrls(payload.markdown, payload.coverImage, markdownUrl),
     );
     const removedAssets = previousAssets.filter((assetUrl) => !nextAssets.has(assetUrl));
 
@@ -373,37 +476,69 @@ export class BlogsService {
 
     const updated = await this.blogModel
       .findById(blog._id)
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return this.formatBlog(updated, userId);
+    return this.formatBlog(updated);
   }
 
   async getUserBlogs(identifier: string, currentUserId?: string) {
     const authorId = await this.resolveUserId(identifier);
-
-    if (!authorId) {
-      return [];
-    }
+    if (!authorId) return [];
 
     const blogs = await this.blogModel
       .find({ author: authorId, isDeleted: false })
       .sort({ publishedAt: -1, createdAt: -1 })
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return blogs.map((blog) => this.formatBlog(blog, currentUserId));
+    const engagementMap = await this.getEngagementMap(
+      blogs.map((blog) => String(blog._id)),
+      currentUserId,
+    );
+
+    return blogs.map((blog) => this.formatBlog(blog, engagementMap));
   }
 
   async getLikedBlogs(userId: string) {
-    const blogs = await this.blogModel
-      .find({
-        isDeleted: false,
-        likes: new Types.ObjectId(userId),
-      })
-      .sort({ updatedAt: -1, publishedAt: -1, createdAt: -1 })
+    const engagements = await this.blogEngagementModel
+      .find({ userId: new Types.ObjectId(userId), liked: true })
+      .sort({ updatedAt: -1 })
       .limit(50)
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .lean()
+      .exec();
 
-    return blogs.map((blog) => this.formatBlog(blog, userId));
+    const blogIds = engagements.map((item) => item.blogId);
+    if (!blogIds.length) return [];
+
+    const blogs = await this.blogModel
+      .find({ _id: { $in: blogIds }, isDeleted: false })
+      .sort({ updatedAt: -1, publishedAt: -1, createdAt: -1 })
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
+
+    const engagementMap = await this.getEngagementMap(
+      blogs.map((blog) => String(blog._id)),
+      userId,
+    );
+    const blogMap = new Map(blogs.map((blog) => [String(blog._id), blog]));
+
+    return blogIds
+      .map((blogId) => blogMap.get(String(blogId)))
+      .filter(Boolean)
+      .map((blog) => this.formatBlog(blog, engagementMap));
   }
 
   async getLatestBlogs(
@@ -418,12 +553,22 @@ export class BlogsService {
         .sort({ publishedAt: -1, createdAt: -1 })
         .skip(skip)
         .limit(pagination.limit)
-        .populate('author', 'username nickname avatar premiumStatus jammId'),
+        .populate(
+          'author',
+          'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+        )
+        .lean()
+        .exec(),
       this.blogModel.countDocuments({ isDeleted: false }),
     ]);
 
+    const engagementMap = await this.getEngagementMap(
+      blogs.map((blog) => String(blog._id)),
+      currentUserId,
+    );
+
     return {
-      data: blogs.map((blog) => this.formatBlog(blog, currentUserId)),
+      data: blogs.map((blog) => this.formatBlog(blog, engagementMap)),
       total,
       page: pagination.page,
       limit: pagination.limit,
@@ -433,7 +578,11 @@ export class BlogsService {
 
   async getBlog(identifier: string, currentUserId?: string) {
     const blog = await this.resolveBlog(identifier);
-    return this.formatBlog(blog, currentUserId);
+    const engagementMap = await this.getEngagementMap(
+      [String(blog._id)],
+      currentUserId,
+    );
+    return this.formatBlog(blog, engagementMap);
   }
 
   async getBlogContent(identifier: string) {
@@ -448,33 +597,52 @@ export class BlogsService {
 
   async likeBlog(identifier: string, userId: string) {
     const blog = await this.resolveBlog(identifier);
-    const uid = new Types.ObjectId(userId);
-    const alreadyLiked = blog.likes.some((id) => id.equals(uid));
+    const existing = await this.blogEngagementModel.findOne({
+      blogId: blog._id,
+      userId: new Types.ObjectId(userId),
+    });
+    const nextLiked = !existing?.liked;
 
-    if (alreadyLiked) {
-      blog.likes = blog.likes.filter((id) => !id.equals(uid));
-    } else {
-      blog.likes.push(uid);
-    }
+    await this.blogEngagementModel.findOneAndUpdate(
+      { blogId: blog._id, userId: new Types.ObjectId(userId) },
+      { $set: { liked: nextLiked } },
+      { upsert: true, new: true },
+    );
+    await this.blogModel
+      .updateOne({ _id: blog._id }, { $inc: { likesCount: nextLiked ? 1 : -1 } })
+      .exec();
 
-    await blog.save();
-
+    const refreshed = await this.blogModel.findById(blog._id).select('likesCount').lean();
     return {
-      liked: !alreadyLiked,
-      likes: blog.likes.length,
+      liked: nextLiked,
+      likes: Number(refreshed?.likesCount || 0),
     };
   }
 
   async viewBlog(identifier: string, userId: string) {
     const blog = await this.resolveBlog(identifier);
-    const uid = new Types.ObjectId(userId);
+    const existing = await this.blogEngagementModel
+      .findOne({
+        blogId: blog._id,
+        userId: new Types.ObjectId(userId),
+      })
+      .select('viewed')
+      .lean()
+      .exec();
 
-    if (!blog.views.some((id) => id.equals(uid))) {
-      blog.views.push(uid);
-      await blog.save();
+    if (!existing?.viewed) {
+      await this.blogEngagementModel.findOneAndUpdate(
+        { blogId: blog._id, userId: new Types.ObjectId(userId) },
+        { $set: { viewed: true } },
+        { upsert: true, new: true },
+      );
+      await this.blogModel
+        .updateOne({ _id: blog._id }, { $inc: { viewsCount: 1 } })
+        .exec();
     }
 
-    return { views: blog.views.length };
+    const refreshed = await this.blogModel.findById(blog._id).select('viewsCount').lean();
+    return { views: Number(refreshed?.viewsCount || 0) };
   }
 
   async addComment(identifier: string, userId: string, content: string) {
@@ -486,22 +654,24 @@ export class BlogsService {
 
     assertMaxChars('Blog izohi', content.trim(), APP_TEXT_LIMITS.blogCommentChars);
     const limits = await this.getBlogLimits(userId);
-    if (this.countUserComments(blog, userId) >= limits.commentCount) {
+    if ((await this.countUserComments(blog._id.toString(), userId)) >= limits.commentCount) {
       throw new ForbiddenException(
         `Bu blog uchun maksimal ${limits.commentCount} ta izoh yozishingiz mumkin`,
       );
     }
 
-    blog.comments.push({
+    await this.blogCommentModel.create({
+      blogId: blog._id,
       userId: new Types.ObjectId(userId),
+      parentCommentId: null,
       content: content.trim(),
-      createdAt: new Date(),
-      replies: [],
-    } as any);
+    });
+    await this.blogModel
+      .updateOne({ _id: blog._id }, { $inc: { commentsCount: 1 } })
+      .exec();
 
-    await blog.save();
-
-    return { comments: blog.comments.length };
+    const refreshed = await this.blogModel.findById(blog._id).select('commentsCount').lean();
+    return { comments: Number(refreshed?.commentsCount || 0) };
   }
 
   async addReply(
@@ -513,43 +683,53 @@ export class BlogsService {
   ) {
     const blog = await this.resolveBlog(identifier);
 
+    if (!Types.ObjectId.isValid(commentId)) {
+      throw new BadRequestException('Izoh identifikatori noto‘g‘ri');
+    }
+
     if (!content?.trim()) {
       throw new BadRequestException('Javob bo‘sh bo‘lishi mumkin emas');
     }
 
     assertMaxChars('Blog javobi', content.trim(), APP_TEXT_LIMITS.blogCommentChars);
 
-    const commentIndex = blog.comments.findIndex(
-      (comment: any) => comment._id.toString() === commentId,
-    );
+    const parentComment = await this.blogCommentModel
+      .findOne({
+        _id: new Types.ObjectId(commentId),
+        blogId: blog._id,
+        parentCommentId: null,
+        isDeleted: false,
+      })
+      .lean()
+      .exec();
 
-    if (commentIndex === -1) {
+    if (!parentComment) {
       throw new NotFoundException('Izoh topilmadi');
     }
 
     const limits = await this.getBlogLimits(userId);
-    if (this.countUserComments(blog, userId) >= limits.commentCount) {
+    if ((await this.countUserComments(blog._id.toString(), userId)) >= limits.commentCount) {
       throw new ForbiddenException(
         `Bu blog uchun maksimal ${limits.commentCount} ta izoh yozishingiz mumkin`,
       );
     }
 
-    if (!blog.comments[commentIndex].replies) {
-      blog.comments[commentIndex].replies = [];
-    }
-
-    blog.comments[commentIndex].replies.push({
+    await this.blogCommentModel.create({
+      blogId: blog._id,
       userId: new Types.ObjectId(userId),
+      parentCommentId: parentComment._id,
       content: content.trim(),
       replyToUser: replyToUser || '',
-      createdAt: new Date(),
-    } as any);
+    });
+    await this.blogModel
+      .updateOne({ _id: blog._id }, { $inc: { commentsCount: 1 } })
+      .exec();
 
-    await blog.save();
-
-    return {
-      replies: blog.comments[commentIndex].replies?.length || 0,
-    };
+    const replies = await this.blogCommentModel.countDocuments({
+      parentCommentId: parentComment._id,
+      isDeleted: false,
+    });
+    return { replies };
   }
 
   async getComments(
@@ -563,42 +743,74 @@ export class BlogsService {
           : { slug: identifier }),
         isDeleted: false,
       })
-      .populate('comments.userId', 'username nickname avatar premiumStatus')
-      .populate(
-        'comments.replies.userId',
-        'username nickname avatar premiumStatus',
-      );
+      .select('_id')
+      .lean()
+      .exec();
 
     if (!blog) {
       throw new NotFoundException('Blog topilmadi');
     }
 
-    const allComments = [...(blog.comments || [])].sort(
-      (a: any, b: any) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
-
     const skip = (pagination.page - 1) * pagination.limit;
-    const paginatedComments = allComments.slice(skip, skip + pagination.limit);
+    const [comments, total] = await Promise.all([
+      this.blogCommentModel
+        .find({
+          blogId: blog._id,
+          parentCommentId: null,
+          isDeleted: false,
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pagination.limit)
+        .lean()
+        .exec(),
+      this.blogCommentModel.countDocuments({
+        blogId: blog._id,
+        parentCommentId: null,
+        isDeleted: false,
+      }),
+    ]);
+
+    const replies = await this.blogCommentModel
+      .find({
+        blogId: blog._id,
+        parentCommentId: { $in: comments.map((comment) => comment._id) },
+        isDeleted: false,
+      })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+
+    const usersMap = await this.resolveCommentUsers([...comments, ...replies]);
+    const repliesMap = new Map<string, any[]>();
+
+    for (const reply of replies) {
+      const key = String(reply.parentCommentId);
+      if (!repliesMap.has(key)) {
+        repliesMap.set(key, []);
+      }
+
+      repliesMap.get(key)?.push({
+        _id: reply._id,
+        user: usersMap.get(String(reply.userId)) || reply.userId,
+        content: reply.content,
+        replyToUser: reply.replyToUser || '',
+        createdAt: reply.createdAt,
+      });
+    }
 
     return {
-      data: paginatedComments.map((comment: any) => ({
+      data: comments.map((comment) => ({
         _id: comment._id,
-        user: comment.userId,
+        user: usersMap.get(String(comment.userId)) || comment.userId,
         content: comment.content,
         createdAt: comment.createdAt,
-        replies: (comment.replies || []).map((reply: any) => ({
-          _id: reply._id,
-          user: reply.userId,
-          content: reply.content,
-          replyToUser: reply.replyToUser,
-          createdAt: reply.createdAt,
-        })),
+        replies: repliesMap.get(String(comment._id)) || [],
       })),
-      total: allComments.length,
+      total,
       page: pagination.page,
       limit: pagination.limit,
-      totalPages: Math.ceil(allComments.length / pagination.limit),
+      totalPages: Math.ceil(total / pagination.limit),
     };
   }
 
@@ -616,9 +828,16 @@ export class BlogsService {
       console.error('Failed to read blog markdown before deletion:', error);
     }
 
-    blog.comments = [];
     blog.isDeleted = true;
+    blog.likesCount = 0;
+    blog.viewsCount = 0;
+    blog.commentsCount = 0;
     await blog.save();
+
+    await Promise.all([
+      this.blogCommentModel.deleteMany({ blogId: blog._id }).exec(),
+      this.blogEngagementModel.deleteMany({ blogId: blog._id }).exec(),
+    ]);
 
     const assetUrls = this.collectManagedAssetUrls(
       markdownContent,

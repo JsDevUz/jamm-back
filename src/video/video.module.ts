@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { VideoGateway } from './video.gateway';
 import { PremiumModule } from '../premium/premium.module';
+import { getJwtSecret } from '../auth/auth-cookie.util';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { PremiumModule } from '../premium/premium.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'fallback-secret',
+        secret: getJwtSecret(configService),
       }),
     }),
     PremiumModule,

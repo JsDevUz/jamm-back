@@ -7,16 +7,19 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
 import { EmailService } from '../common/services/email.service';
+import { getJwtSecret } from './auth-cookie.util';
+import { AppSettingsModule } from '../app-settings/app-settings.module';
 
 @Module({
   imports: [
     UsersModule,
+    AppSettingsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
+        secret: getJwtSecret(configService),
         signOptions: { expiresIn: 604800 }, // 7 days in seconds
       }),
     }),

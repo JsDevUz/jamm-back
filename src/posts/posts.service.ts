@@ -7,6 +7,11 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Post, PostDocument } from './schemas/post.schema';
+import { PostComment, PostCommentDocument } from './schemas/post-comment.schema';
+import {
+  PostEngagement,
+  PostEngagementDocument,
+} from './schemas/post-engagement.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { EncryptionService } from '../common/encryption/encryption.service';
 import {
@@ -28,6 +33,10 @@ export class PostsService {
 
   constructor(
     @InjectModel(Post.name) private postModel: Model<PostDocument>,
+    @InjectModel(PostComment.name)
+    private postCommentModel: Model<PostCommentDocument>,
+    @InjectModel(PostEngagement.name)
+    private postEngagementModel: Model<PostEngagementDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private encryptionService: EncryptionService,
   ) {
@@ -36,87 +45,26 @@ export class PostsService {
     );
   }
 
-  private decryptPost(post: any): any {
-    const obj = post.toObject ? post.toObject() : { ...post };
-    if (obj.isEncrypted && obj.iv && obj.authTag) {
-      try {
-        obj.content = this.encryptionStrategy.decrypt({
-          encryptedContent: obj.content,
-          iv: obj.iv,
-          authTag: obj.authTag,
-          keyVersion: obj.keyVersion || 0,
-        });
-      } catch {
-        obj.content = '[Shifrlangan matn ochilmadi]';
-      }
+  private decryptContent(
+    content: string,
+    iv?: string,
+    authTag?: string,
+    keyVersion?: number,
+  ) {
+    if (!iv || !authTag) {
+      return content;
     }
-    // Decrypt comments and replies
-    if (obj.comments && obj.comments.length > 0) {
-      obj.comments = obj.comments.map((c: any) => {
-        if (c.isEncrypted && c.iv && c.authTag) {
-          try {
-            c.content = this.encryptionStrategy.decrypt({
-              encryptedContent: c.content,
-              iv: c.iv,
-              authTag: c.authTag,
-              keyVersion: c.keyVersion || 0,
-            });
-          } catch {
-            c.content = '[Shifrlangan izoh ochilmadi]';
-          }
-        }
 
-        // Decrypt replies
-        if (c.replies && c.replies.length > 0) {
-          c.replies = c.replies.map((r: any) => {
-            if (r.isEncrypted && r.iv && r.authTag) {
-              try {
-                r.content = this.encryptionStrategy.decrypt({
-                  encryptedContent: r.content,
-                  iv: r.iv,
-                  authTag: r.authTag,
-                  keyVersion: r.keyVersion || 0,
-                });
-              } catch {
-                r.content = '[Shifrlangan javob ochilmadi]';
-              }
-            }
-            return r;
-          });
-        }
-
-        return c;
+    try {
+      return this.encryptionStrategy.decrypt({
+        encryptedContent: content,
+        iv,
+        authTag,
+        keyVersion: keyVersion || 0,
       });
+    } catch {
+      return '[Shifrlangan matn ochilmadi]';
     }
-    return obj;
-  }
-
-  private formatPost(post: any, currentUserId?: string) {
-    const obj = this.decryptPost(post);
-    return {
-      _id: obj._id,
-      author: obj.author
-        ? {
-            _id: obj.author._id,
-            jammId: obj.author.jammId,
-            username: obj.author.username,
-            nickname: obj.author.nickname,
-            avatar: obj.author.avatar,
-            premiumStatus: obj.author.premiumStatus,
-          }
-        : obj.author,
-      content: obj.content,
-      likes: obj.likes?.length || 0,
-      liked: currentUserId
-        ? obj.likes?.some(
-            (id: any) => id.toString() === currentUserId.toString(),
-          )
-        : false,
-      views: obj.views?.length || 0,
-      comments: obj.comments?.length || 0,
-      createdAt: obj.createdAt,
-      updatedAt: obj.updatedAt,
-    };
   }
 
   private async getPostDailyLimit(userId: string) {
@@ -137,18 +85,92 @@ export class PostsService {
     return getTierLimit(APP_LIMITS.postCommentsPerPost, user?.premiumStatus);
   }
 
-  private countUserPostComments(post: any, userId: string) {
-    return Array.isArray(post.comments)
-      ? post.comments.reduce((total: number, comment: any) => {
-          const ownComment = comment.userId?.toString() === userId ? 1 : 0;
-          const ownReplies = Array.isArray(comment.replies)
-            ? comment.replies.filter(
-                (reply: any) => reply.userId?.toString() === userId,
-              ).length
-            : 0;
-          return total + ownComment + ownReplies;
-        }, 0)
-      : 0;
+  private async countUserPostComments(postId: string, userId: string) {
+    return this.postCommentModel.countDocuments({
+      postId: new Types.ObjectId(postId),
+      userId: new Types.ObjectId(userId),
+      isDeleted: false,
+    });
+  }
+
+  private async getEngagementMap(postIds: string[], currentUserId?: string) {
+    if (!currentUserId || !postIds.length) {
+      return new Map<string, { liked: boolean; viewed: boolean }>();
+    }
+
+    const engagements = await this.postEngagementModel
+      .find({
+        postId: { $in: postIds.map((id) => new Types.ObjectId(id)) },
+        userId: new Types.ObjectId(currentUserId),
+      })
+      .select('postId liked viewed')
+      .lean()
+      .exec();
+
+    return new Map(
+      engagements.map((item) => [
+        String(item.postId),
+        {
+          liked: Boolean(item.liked),
+          viewed: Boolean(item.viewed),
+        },
+      ]),
+    );
+  }
+
+  private formatPost(
+    post: any,
+    engagementMap?: Map<string, { liked: boolean; viewed: boolean }>,
+  ) {
+    const obj = typeof post?.toObject === 'function' ? post.toObject() : post;
+    const engagement = engagementMap?.get(String(obj._id));
+
+    return {
+      _id: obj._id,
+      author: obj.author
+        ? {
+            _id: obj.author._id,
+            jammId: obj.author.jammId,
+            username: obj.author.username,
+            nickname: obj.author.nickname,
+            avatar: obj.author.avatar,
+            premiumStatus: obj.author.premiumStatus,
+          }
+        : obj.author,
+      content: obj.isEncrypted
+        ? this.decryptContent(obj.content, obj.iv, obj.authTag, obj.keyVersion)
+        : obj.content,
+      likes: Number(obj.likesCount || 0),
+      liked: Boolean(engagement?.liked),
+      views: Number(obj.viewsCount || 0),
+      previouslySeen: Boolean(engagement?.viewed),
+      comments: Number(obj.commentsCount || 0),
+      createdAt: obj.createdAt,
+      updatedAt: obj.updatedAt,
+    };
+  }
+
+  private async resolveCommentUsers(comments: any[]) {
+    const userIds = Array.from(
+      new Set(
+        comments
+          .map((comment) => String(comment.userId || ''))
+          .filter(Boolean),
+      ),
+    );
+    if (!userIds.length) {
+      return new Map<string, any>();
+    }
+
+    const users = await this.userModel
+      .find({ _id: { $in: userIds.map((id) => new Types.ObjectId(id)) } })
+      .select(
+        'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
+
+    return new Map(users.map((user) => [String(user._id), user]));
   }
 
   async createPost(userId: string, content: string) {
@@ -181,17 +203,25 @@ export class PostsService {
       encryptionType: EncryptionType.SERVER,
       isEncrypted: true,
       keyVersion: encrypted.keyVersion,
+      likesCount: 0,
+      viewsCount: 0,
+      commentsCount: 0,
     });
 
     const populated = await this.postModel
       .findById(post._id)
-      .populate('author', 'username nickname avatar premiumStatus');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return this.formatPost(populated, userId);
+    return this.formatPost(populated);
   }
 
   async updatePost(postId: string, userId: string, content: string) {
-    const post = await this.postModel.findById(postId);
+    const post = await this.postModel.findById(postId).exec();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
     if (post.author.toString() !== userId) {
       throw new ForbiddenException('Faqat muallif tahrirlashi mumkin');
@@ -204,20 +234,23 @@ export class PostsService {
     assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
 
     const encrypted = this.encryptionStrategy.encrypt(content);
-
     post.content = encrypted.encryptedContent;
     post.iv = encrypted.iv;
     post.authTag = encrypted.authTag;
     post.keyVersion = encrypted.keyVersion;
     post.isEncrypted = true;
-
     await post.save();
 
     const populated = await this.postModel
       .findById(post._id)
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return this.formatPost(populated, userId);
+    return this.formatPost(populated);
   }
 
   async getFeed(
@@ -225,30 +258,40 @@ export class PostsService {
     type: string = 'foryou',
     pagination: { page: number; limit: number } = { page: 1, limit: 15 },
   ) {
-    let filter: any = { isDeleted: false };
+    const filter: any = { isDeleted: false };
 
     if (type === 'following') {
-      const user = await this.userModel.findById(userId).select('following');
+      const user = await this.userModel.findById(userId).select('following').lean();
       const followingIds = user?.following || [];
-      if (followingIds.length === 0)
+      if (!followingIds.length) {
         return { data: [], totalPages: 0, page: 1, limit: pagination.limit };
+      }
       filter.author = { $in: followingIds };
     }
 
     const skip = (pagination.page - 1) * pagination.limit;
-
     const [posts, total] = await Promise.all([
       this.postModel
         .find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(pagination.limit)
-        .populate('author', 'username nickname avatar premiumStatus'),
+        .populate(
+          'author',
+          'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+        )
+        .lean()
+        .exec(),
       this.postModel.countDocuments(filter),
     ]);
 
+    const engagementMap = await this.getEngagementMap(
+      posts.map((post) => String(post._id)),
+      userId,
+    );
+
     return {
-      data: posts.map((p) => this.formatPost(p, userId)),
+      data: posts.map((post) => this.formatPost(post, engagementMap)),
       total,
       page: pagination.page,
       limit: pagination.limit,
@@ -257,15 +300,17 @@ export class PostsService {
   }
 
   async getUserPosts(identifier: string, currentUserId?: string) {
-    // identifier can be jammId (5-7 digit) or MongoDB ObjectId string
     const isJammId = /^\d{5,7}$/.test(identifier);
-    let authorId: any;
+    let authorId: Types.ObjectId;
+
     if (isJammId) {
       const user = await this.userModel
         .findOne({ jammId: Number(identifier) })
-        .select('_id');
-      if (!user) return [];
-      authorId = user._id;
+        .select('_id')
+        .lean()
+        .exec();
+      if (!user?._id) return [];
+      authorId = new Types.ObjectId(user._id);
     } else {
       authorId = new Types.ObjectId(identifier);
     }
@@ -273,93 +318,149 @@ export class PostsService {
     const posts = await this.postModel
       .find({ author: authorId, isDeleted: false })
       .sort({ createdAt: -1 })
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return posts.map((p) => this.formatPost(p, currentUserId));
+    const engagementMap = await this.getEngagementMap(
+      posts.map((post) => String(post._id)),
+      currentUserId,
+    );
+
+    return posts.map((post) => this.formatPost(post, engagementMap));
   }
 
   async getLikedPosts(userId: string) {
+    const engagements = await this.postEngagementModel
+      .find({
+        userId: new Types.ObjectId(userId),
+        liked: true,
+      })
+      .sort({ updatedAt: -1 })
+      .limit(50)
+      .lean()
+      .exec();
+
+    const postIds = engagements.map((item) => item.postId);
+    if (!postIds.length) return [];
+
     const posts = await this.postModel
       .find({
+        _id: { $in: postIds },
         isDeleted: false,
-        likes: new Types.ObjectId(userId),
       })
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .limit(50)
-      .populate('author', 'username nickname avatar premiumStatus jammId');
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
 
-    return posts.map((post) => this.formatPost(post, userId));
+    const engagementMap = await this.getEngagementMap(
+      posts.map((post) => String(post._id)),
+      userId,
+    );
+    const postMap = new Map(posts.map((post) => [String(post._id), post]));
+
+    return postIds
+      .map((postId) => postMap.get(String(postId)))
+      .filter(Boolean)
+      .map((post) => this.formatPost(post, engagementMap));
   }
 
   async likePost(postId: string, userId: string) {
-    const post = await this.postModel.findById(postId);
+    const post = await this.postModel.findById(postId).exec();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
 
-    const uid = new Types.ObjectId(userId);
-    const alreadyLiked = post.likes.some((id) => id.equals(uid));
+    const existing = await this.postEngagementModel.findOne({
+      postId: post._id,
+      userId: new Types.ObjectId(userId),
+    });
 
-    if (alreadyLiked) {
-      post.likes = post.likes.filter((id) => !id.equals(uid));
-    } else {
-      post.likes.push(uid);
-    }
+    const nextLiked = !existing?.liked;
 
-    await post.save();
+    await this.postEngagementModel.findOneAndUpdate(
+      { postId: post._id, userId: new Types.ObjectId(userId) },
+      { $set: { liked: nextLiked } },
+      { upsert: true, new: true },
+    );
+
+    await this.postModel
+      .updateOne({ _id: post._id }, { $inc: { likesCount: nextLiked ? 1 : -1 } })
+      .exec();
+
+    const refreshed = await this.postModel.findById(post._id).select('likesCount').lean();
 
     return {
-      liked: !alreadyLiked,
-      likes: post.likes.length,
+      liked: nextLiked,
+      likes: Number(refreshed?.likesCount || 0),
     };
   }
 
   async viewPost(postId: string, userId: string) {
-    const uid = new Types.ObjectId(userId);
+    const post = await this.postModel.findById(postId).select('_id isDeleted').lean();
+    if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
 
-    await this.postModel.findByIdAndUpdate(postId, {
-      $addToSet: { views: uid },
-    });
+    const existing = await this.postEngagementModel
+      .findOne({
+        postId: post._id,
+        userId: new Types.ObjectId(userId),
+      })
+      .select('viewed')
+      .lean()
+      .exec();
 
-    const post = await this.postModel.findById(postId);
-    return { views: post?.views?.length || 0 };
+    if (!existing?.viewed) {
+      await this.postEngagementModel.findOneAndUpdate(
+        { postId: post._id, userId: new Types.ObjectId(userId) },
+        { $set: { viewed: true } },
+        { upsert: true, new: true },
+      );
+      await this.postModel
+        .updateOne({ _id: post._id }, { $inc: { viewsCount: 1 } })
+        .exec();
+    }
+
+    const refreshed = await this.postModel.findById(post._id).select('viewsCount').lean();
+    return { views: Number(refreshed?.viewsCount || 0) };
   }
 
   async addComment(postId: string, userId: string, content: string) {
-    const post = await this.postModel.findById(postId);
+    const post = await this.postModel.findById(postId).select('_id isDeleted').lean();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
     if (!String(content || '').trim()) {
       throw new BadRequestException('Izoh bo‘sh bo‘lishi mumkin emas');
     }
 
-    assertMaxChars(
-      'Gurung izohi',
-      content.trim(),
-      APP_TEXT_LIMITS.postCommentChars,
-    );
+    assertMaxChars('Gurung izohi', content.trim(), APP_TEXT_LIMITS.postCommentChars);
 
     const commentLimit = await this.getPostCommentLimit(userId);
-    if (this.countUserPostComments(post, userId) >= commentLimit) {
+    if ((await this.countUserPostComments(postId, userId)) >= commentLimit) {
       throw new ForbiddenException(
         `Bu gurung uchun maksimal ${commentLimit} ta izoh yozishingiz mumkin`,
       );
     }
 
     const encrypted = this.encryptionStrategy.encrypt(content);
-
-    const comment = {
+    await this.postCommentModel.create({
+      postId: post._id,
       userId: new Types.ObjectId(userId),
+      parentCommentId: null,
       content: encrypted.encryptedContent,
       iv: encrypted.iv,
       authTag: encrypted.authTag,
       isEncrypted: true,
       keyVersion: encrypted.keyVersion,
-      createdAt: new Date(),
-      replies: [],
-    };
+    });
 
-    post.comments.push(comment);
-    await post.save();
-
-    return { comments: post.comments.length };
+    await this.postModel
+      .updateOne({ _id: post._id }, { $inc: { commentsCount: 1 } })
+      .exec();
+    const refreshed = await this.postModel.findById(post._id).select('commentsCount').lean();
+    return { comments: Number(refreshed?.commentsCount || 0) };
   }
 
   async addReply(
@@ -369,16 +470,26 @@ export class PostsService {
     content: string,
     replyToUser?: string,
   ) {
-    const post = await this.postModel.findById(postId);
+    const post = await this.postModel.findById(postId).select('_id isDeleted').lean();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
+    if (!Types.ObjectId.isValid(commentId)) {
+      throw new BadRequestException('Izoh identifikatori noto‘g‘ri');
+    }
     if (!String(content || '').trim()) {
       throw new BadRequestException('Javob bo‘sh bo‘lishi mumkin emas');
     }
 
-    const commentIndex = post.comments.findIndex(
-      (c: any) => c._id.toString() === commentId,
-    );
-    if (commentIndex === -1) {
+    const parentComment = await this.postCommentModel
+      .findOne({
+        _id: new Types.ObjectId(commentId),
+        postId: post._id,
+        parentCommentId: null,
+        isDeleted: false,
+      })
+      .lean()
+      .exec();
+
+    if (!parentComment) {
       throw new NotFoundException('Izoh topilmadi');
     }
 
@@ -389,92 +500,135 @@ export class PostsService {
     );
 
     const commentLimit = await this.getPostCommentLimit(userId);
-    if (this.countUserPostComments(post, userId) >= commentLimit) {
+    if ((await this.countUserPostComments(postId, userId)) >= commentLimit) {
       throw new ForbiddenException(
         `Bu gurung uchun maksimal ${commentLimit} ta izoh yozishingiz mumkin`,
       );
     }
 
     const encrypted = this.encryptionStrategy.encrypt(content);
-
-    const reply = {
+    await this.postCommentModel.create({
+      postId: post._id,
       userId: new Types.ObjectId(userId),
+      parentCommentId: parentComment._id,
       content: encrypted.encryptedContent,
       replyToUser: replyToUser || '',
       iv: encrypted.iv,
       authTag: encrypted.authTag,
       isEncrypted: true,
       keyVersion: encrypted.keyVersion,
-      createdAt: new Date(),
-    };
+    });
 
-    if (!post.comments[commentIndex].replies) {
-      post.comments[commentIndex].replies = [];
-    }
+    await this.postModel
+      .updateOne({ _id: post._id }, { $inc: { commentsCount: 1 } })
+      .exec();
 
-    post.comments[commentIndex].replies.push(reply as any);
-    await post.save();
+    const repliesCount = await this.postCommentModel.countDocuments({
+      parentCommentId: parentComment._id,
+      isDeleted: false,
+    });
 
-    return { replies: post.comments[commentIndex].replies.length };
+    return { replies: repliesCount };
   }
 
   async getComments(
     postId: string,
     pagination: { page: number; limit: number } = { page: 1, limit: 10 },
   ) {
-    const post = await this.postModel
-      .findById(postId)
-      .populate('comments.userId', 'username nickname avatar premiumStatus')
-      .populate(
-        'comments.replies.userId',
-        'username nickname avatar premiumStatus',
-      );
-
+    const post = await this.postModel.findById(postId).select('_id isDeleted').lean();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
 
-    const decrypted = this.decryptPost(post);
-    const allComments = decrypted.comments || [];
-
-    // Sort comments by createdAt descending (newest first)
-    allComments.sort(
-      (a: any, b: any) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
-
     const skip = (pagination.page - 1) * pagination.limit;
-    const paginatedComments = allComments.slice(skip, skip + pagination.limit);
+    const [comments, total] = await Promise.all([
+      this.postCommentModel
+        .find({
+          postId: post._id,
+          parentCommentId: null,
+          isDeleted: false,
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pagination.limit)
+        .lean()
+        .exec(),
+      this.postCommentModel.countDocuments({
+        postId: post._id,
+        parentCommentId: null,
+        isDeleted: false,
+      }),
+    ]);
+
+    const replies = await this.postCommentModel
+      .find({
+        postId: post._id,
+        parentCommentId: {
+          $in: comments.map((comment) => comment._id),
+        },
+        isDeleted: false,
+      })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+
+    const usersMap = await this.resolveCommentUsers([...comments, ...replies]);
+    const repliesMap = new Map<string, any[]>();
+
+    for (const reply of replies) {
+      const key = String(reply.parentCommentId);
+      if (!repliesMap.has(key)) {
+        repliesMap.set(key, []);
+      }
+
+      repliesMap.get(key)?.push({
+        _id: reply._id,
+        user: usersMap.get(String(reply.userId)) || reply.userId,
+        content: reply.isEncrypted
+          ? this.decryptContent(reply.content, reply.iv, reply.authTag, reply.keyVersion)
+          : reply.content,
+        replyToUser: reply.replyToUser || '',
+        createdAt: reply.createdAt,
+      });
+    }
 
     return {
-      data: paginatedComments.map((c: any) => ({
-        _id: c._id,
-        user: c.userId,
-        content: c.content,
-        createdAt: c.createdAt,
-        replies: (c.replies || []).map((r: any) => ({
-          _id: r._id,
-          user: r.userId,
-          content: r.content,
-          replyToUser: r.replyToUser,
-          createdAt: r.createdAt,
-        })),
+      data: comments.map((comment) => ({
+        _id: comment._id,
+        user: usersMap.get(String(comment.userId)) || comment.userId,
+        content: comment.isEncrypted
+          ? this.decryptContent(
+              comment.content,
+              comment.iv,
+              comment.authTag,
+              comment.keyVersion,
+            )
+          : comment.content,
+        createdAt: comment.createdAt,
+        replies: repliesMap.get(String(comment._id)) || [],
       })),
-      total: allComments.length,
+      total,
       page: pagination.page,
       limit: pagination.limit,
-      totalPages: Math.ceil(allComments.length / pagination.limit),
+      totalPages: Math.ceil(total / pagination.limit),
     };
   }
 
   async deletePost(postId: string, userId: string) {
-    const post = await this.postModel.findById(postId);
+    const post = await this.postModel.findById(postId).exec();
     if (!post) throw new NotFoundException('Post topilmadi');
     if (post.author.toString() !== userId) {
       throw new ForbiddenException("Faqat muallif o'chirishi mumkin");
     }
 
-    post.comments = [];
     post.isDeleted = true;
+    post.likesCount = 0;
+    post.viewsCount = 0;
+    post.commentsCount = 0;
     await post.save();
+
+    await Promise.all([
+      this.postCommentModel.deleteMany({ postId: post._id }).exec(),
+      this.postEngagementModel.deleteMany({ postId: post._id }).exec(),
+    ]);
 
     return { deleted: true };
   }

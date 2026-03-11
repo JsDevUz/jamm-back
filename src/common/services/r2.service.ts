@@ -174,6 +174,56 @@ export class R2Service {
     return this.buildDeliveryUrl(nextKey);
   }
 
+  private resolveCacheControl(
+    key: string,
+    contentType: string,
+  ): string | undefined {
+    const cleanKey = this.extractObjectKey(key).toLowerCase();
+    const normalizedType = String(contentType || '').toLowerCase();
+
+    if (cleanKey.endsWith('.m3u8')) {
+      return 'public, max-age=60';
+    }
+
+    if (cleanKey.endsWith('.key')) {
+      return 'private, no-store, no-cache, must-revalidate';
+    }
+
+    if (
+      cleanKey.endsWith('.ts') ||
+      cleanKey.endsWith('.m4s') ||
+      cleanKey.endsWith('.mp4') ||
+      cleanKey.endsWith('.webm') ||
+      cleanKey.endsWith('.mp3') ||
+      cleanKey.endsWith('.wav') ||
+      cleanKey.endsWith('.ogg') ||
+      cleanKey.endsWith('.pdf') ||
+      cleanKey.endsWith('.png') ||
+      cleanKey.endsWith('.jpg') ||
+      cleanKey.endsWith('.jpeg') ||
+      cleanKey.endsWith('.gif') ||
+      cleanKey.endsWith('.webp') ||
+      cleanKey.endsWith('.svg') ||
+      cleanKey.endsWith('.avif') ||
+      normalizedType.startsWith('image/') ||
+      normalizedType.startsWith('audio/') ||
+      normalizedType.startsWith('video/') ||
+      normalizedType === 'application/pdf'
+    ) {
+      return 'public, max-age=31536000, immutable';
+    }
+
+    if (
+      cleanKey.endsWith('.md') ||
+      normalizedType.includes('markdown') ||
+      normalizedType.startsWith('text/')
+    ) {
+      return 'public, max-age=300';
+    }
+
+    return 'public, max-age=86400';
+  }
+
   async uploadFile(
     file: Express.Multer.File,
     folder: string = 'avatars',
@@ -187,6 +237,7 @@ export class R2Service {
         Key: fileName,
         Body: file.buffer,
         ContentType: file.mimetype,
+        CacheControl: this.resolveCacheControl(fileName, file.mimetype),
       });
 
       await this.s3Client.send(command);
@@ -211,6 +262,7 @@ export class R2Service {
         Key: key,
         Body: body,
         ContentType: contentType,
+        CacheControl: this.resolveCacheControl(key, contentType),
       });
 
       await this.s3Client.send(command);

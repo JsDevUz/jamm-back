@@ -19,12 +19,16 @@ const jwt_1 = require("@nestjs/jwt");
 const config_1 = require("@nestjs/config");
 const premium_service_1 = require("../premium/premium.service");
 const app_limits_1 = require("../common/limits/app-limits");
+const cors_config_1 = require("../common/config/cors.config");
+const ws_auth_util_1 = require("../common/auth/ws-auth.util");
+const socket_rate_limiter_1 = require("../common/ws/socket-rate-limiter");
 let VideoGateway = class VideoGateway {
     jwtService;
     configService;
     premiumService;
     server;
     rooms = new Map();
+    rateLimiter = new socket_rate_limiter_1.SocketRateLimiter();
     constructor(jwtService, configService, premiumService) {
         this.jwtService = jwtService;
         this.configService = configService;
@@ -32,11 +36,8 @@ let VideoGateway = class VideoGateway {
     }
     async handleConnection(client) {
         try {
-            const token = client.handshake?.auth?.token ||
-                client.handshake?.query?.token;
-            if (token) {
-                const secret = this.configService.get('JWT_SECRET') || 'fallback-secret';
-                const payload = await this.jwtService.verifyAsync(token, { secret });
+            const payload = await (0, ws_auth_util_1.verifySocketToken)(this.jwtService, this.configService, client);
+            if (payload) {
                 client.data.user = {
                     _id: payload.sub,
                     email: payload.email,
@@ -71,6 +72,7 @@ let VideoGateway = class VideoGateway {
         });
     }
     async handleCreateRoom(client, data) {
+        this.rateLimiter.take(`video:create-room:${client.id}`, 5, 60_000);
         const { roomId, displayName, isPrivate = false, title = '' } = data;
         const userId = client.data?.user?._id;
         if (!userId) {
@@ -122,6 +124,7 @@ let VideoGateway = class VideoGateway {
         }
     }
     async handleJoinRoom(client, data) {
+        this.rateLimiter.take(`video:join-room:${client.id}`, 15, 60_000);
         const { roomId, displayName } = data;
         const room = this.rooms.get(roomId);
         if (!room) {
@@ -161,6 +164,7 @@ let VideoGateway = class VideoGateway {
         client.join(roomId);
     }
     handleApproveKnock(client, data) {
+        this.rateLimiter.take(`video:approve-knock:${client.id}`, 30, 60_000);
         const { roomId, peerId } = data;
         const room = this.rooms.get(roomId);
         if (!room || room.creatorSocketId !== client.id)
@@ -182,6 +186,7 @@ let VideoGateway = class VideoGateway {
         this.admitPeer(entry.socket, roomId, entry.displayName, room);
     }
     handleRejectKnock(client, data) {
+        this.rateLimiter.take(`video:reject-knock:${client.id}`, 30, 60_000);
         const { roomId, peerId } = data;
         const room = this.rooms.get(roomId);
         if (!room || room.creatorSocketId !== client.id)
@@ -192,22 +197,26 @@ let VideoGateway = class VideoGateway {
             .emit('knock-rejected', { reason: 'Creator rad etdi' });
     }
     handleOffer(client, data) {
+        this.rateLimiter.take(`video:offer:${client.id}`, 600, 60_000);
         this.server
             .to(data.targetId)
             .emit('offer', { senderId: client.id, sdp: data.sdp });
     }
     handleAnswer(client, data) {
+        this.rateLimiter.take(`video:answer:${client.id}`, 600, 60_000);
         this.server
             .to(data.targetId)
             .emit('answer', { senderId: client.id, sdp: data.sdp });
     }
     handleIceCandidate(client, data) {
+        this.rateLimiter.take(`video:ice:${client.id}`, 4000, 60_000);
         this.server.to(data.targetId).emit('ice-candidate', {
             senderId: client.id,
             candidate: data.candidate,
         });
     }
     handleLeaveRoom(client, data) {
+        this.rateLimiter.take(`video:leave-room:${client.id}`, 30, 60_000);
         const { roomId } = data;
         const room = this.rooms.get(roomId);
         if (room) {
@@ -220,36 +229,44 @@ let VideoGateway = class VideoGateway {
         client.leave(roomId);
     }
     handleScreenShareStarted(client, data) {
+        this.rateLimiter.take(`video:screen:${client.id}`, 120, 60_000);
         client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
     }
     handleScreenShareStopped(client, data) {
+        this.rateLimiter.take(`video:screen:${client.id}`, 120, 60_000);
         client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
     }
     handleRecordingStarted(client, data) {
+        this.rateLimiter.take(`video:recording:${client.id}`, 60, 60_000);
         client.to(data.roomId).emit('recording-started', { peerId: client.id });
     }
     handleRecordingStopped(client, data) {
+        this.rateLimiter.take(`video:recording:${client.id}`, 60, 60_000);
         client.to(data.roomId).emit('recording-stopped', { peerId: client.id });
     }
     handleForceMuteMic(client, data) {
+        this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
         const room = this.rooms.get(data.roomId);
         if (!room || room.creatorSocketId !== client.id)
             return;
         this.server.to(data.peerId).emit('force-mute-mic');
     }
     handleForceMuteCam(client, data) {
+        this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
         const room = this.rooms.get(data.roomId);
         if (!room || room.creatorSocketId !== client.id)
             return;
         this.server.to(data.peerId).emit('force-mute-cam');
     }
     handleAllowMic(client, data) {
+        this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
         const room = this.rooms.get(data.roomId);
         if (!room || room.creatorSocketId !== client.id)
             return;
         this.server.to(data.peerId).emit('allow-mic');
     }
     handleAllowCam(client, data) {
+        this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
         const room = this.rooms.get(data.roomId);
         if (!room || room.creatorSocketId !== client.id)
             return;
@@ -432,7 +449,7 @@ __decorate([
 ], VideoGateway.prototype, "handleKickPeer", null);
 exports.VideoGateway = VideoGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
-        cors: { origin: '*', methods: ['GET', 'POST'] },
+        cors: { origin: (0, cors_config_1.getAllowedOrigins)(), methods: ['GET', 'POST'], credentials: true },
         namespace: '/video',
     }),
     __metadata("design:paramtypes", [jwt_1.JwtService,

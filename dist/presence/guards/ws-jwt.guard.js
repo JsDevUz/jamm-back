@@ -15,6 +15,7 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const jwt_1 = require("@nestjs/jwt");
 const websockets_1 = require("@nestjs/websockets");
+const ws_auth_util_1 = require("../../common/auth/ws-auth.util");
 let WsJwtGuard = WsJwtGuard_1 = class WsJwtGuard {
     jwtService;
     configService;
@@ -25,15 +26,12 @@ let WsJwtGuard = WsJwtGuard_1 = class WsJwtGuard {
     }
     async canActivate(context) {
         const client = context.switchToWs().getClient();
-        const token = client.handshake?.auth?.token ||
-            client.handshake?.query?.token;
-        if (!token) {
-            this.logger.warn(`Connection rejected: no token (socket ${client.id})`);
-            throw new websockets_1.WsException('Authentication token missing');
-        }
         try {
-            const secret = this.configService.get('JWT_SECRET') || 'fallback-secret';
-            const payload = await this.jwtService.verifyAsync(token, { secret });
+            const payload = await (0, ws_auth_util_1.verifySocketToken)(this.jwtService, this.configService, client);
+            if (!payload) {
+                this.logger.warn(`Connection rejected: no token (socket ${client.id})`);
+                throw new websockets_1.WsException('Authentication token missing');
+            }
             client.data.user = {
                 _id: payload.sub,
                 email: payload.email,

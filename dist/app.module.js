@@ -25,6 +25,8 @@ const arena_module_1 = require("./arena/arena.module");
 const blogs_module_1 = require("./blogs/blogs.module");
 const app_settings_module_1 = require("./app-settings/app-settings.module");
 const app_access_guard_1 = require("./auth/guards/app-access.guard");
+const common_module_1 = require("./common/common.module");
+const admin_module_1 = require("./admin/admin.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -39,6 +41,7 @@ exports.AppModule = AppModule = __decorate([
                     uri: configService.get('MONGODB_URI'),
                 }),
             }),
+            common_module_1.CommonModule,
             throttler_1.ThrottlerModule.forRoot([
                 {
                     ttl: 60000,
@@ -57,6 +60,7 @@ exports.AppModule = AppModule = __decorate([
             arena_module_1.ArenaModule,
             blogs_module_1.BlogsModule,
             app_settings_module_1.AppSettingsModule,
+            admin_module_1.AdminModule,
         ],
         providers: [
             {

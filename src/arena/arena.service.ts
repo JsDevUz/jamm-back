@@ -35,6 +35,10 @@ import {
   SentenceBuilderAttempt,
   SentenceBuilderAttemptDocument,
 } from './schemas/sentence-builder-attempt.schema';
+import {
+  MnemonicResult,
+  MnemonicResultDocument,
+} from './schemas/mnemonic-result.schema';
 import { UsersService } from '../users/users.service';
 import {
   APP_LIMITS,
@@ -42,6 +46,7 @@ import {
   assertMaxChars,
   getTierLimit,
 } from '../common/limits/app-limits';
+import { generateShortSlug } from '../common/utils/generate-short-slug';
 
 export interface BattleRoom {
   roomId: string;
@@ -80,8 +85,14 @@ export class ArenaService {
     private sentenceBuilderShareLinkModel: Model<SentenceBuilderShareLinkDocument>,
     @InjectModel(SentenceBuilderAttempt.name)
     private sentenceBuilderAttemptModel: Model<SentenceBuilderAttemptDocument>,
+    @InjectModel(MnemonicResult.name)
+    private mnemonicResultModel: Model<MnemonicResultDocument>,
     private usersService: UsersService,
   ) {}
+
+  private normalizeMnemonicMode(mode: string): 'digits' | 'words' {
+    return mode === 'words' ? 'words' : 'digits';
+  }
 
   private activeBattles: Map<string, BattleRoom> = new Map();
 
@@ -133,7 +144,9 @@ export class ArenaService {
             (line.startsWith("'") && line.endsWith("'")),
         );
         const extraLine = lines.find(
-          (line) => line.startsWith('`') && line.endsWith('`'),
+          (line) =>
+            (line.startsWith('+') && line.endsWith('+')) ||
+            (line.startsWith('`') && line.endsWith('`')),
         );
 
         const prompt = promptLine ? promptLine.replace(/^\$\s*/, '').trim() : '';
@@ -246,6 +259,82 @@ export class ArenaService {
     return { title, cards };
   }
 
+  private async generateUniqueFlashcardDeckSlug(
+    excludeDeckId?: string,
+  ): Promise<string> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const slug = generateShortSlug(10);
+      const existing = await this.flashcardModel
+        .findOne({
+          urlSlug: slug,
+          ...(excludeDeckId
+            ? { _id: { $ne: new Types.ObjectId(excludeDeckId) } }
+            : {}),
+        })
+        .select('_id')
+        .lean()
+        .exec();
+
+      if (!existing) {
+        return slug;
+      }
+    }
+
+    throw new BadRequestException(
+      'Flashcard havolasi yaratilmadi, qayta urinib ko‘ring',
+    );
+  }
+
+  private buildFlashcardDeckIdentifierQuery(identifier: string) {
+    const normalizedIdentifier = String(identifier || '').trim().toLowerCase();
+    const isObjectId =
+      Types.ObjectId.isValid(normalizedIdentifier) &&
+      String(new Types.ObjectId(normalizedIdentifier)) === normalizedIdentifier;
+
+    if (isObjectId) {
+      return {
+        $or: [
+          { _id: new Types.ObjectId(normalizedIdentifier) },
+          { urlSlug: normalizedIdentifier },
+        ],
+      };
+    }
+
+    return { urlSlug: normalizedIdentifier };
+  }
+
+  private async ensureFlashcardDeckSlug<T extends { _id: Types.ObjectId; urlSlug?: string }>(
+    deck: T,
+  ): Promise<T> {
+    if (deck?.urlSlug) {
+      return deck;
+    }
+
+    const slug = await this.generateUniqueFlashcardDeckSlug(deck._id.toString());
+    await this.flashcardModel
+      .updateOne(
+        {
+          _id: deck._id,
+          $or: [
+            { urlSlug: { $exists: false } },
+            { urlSlug: null },
+            { urlSlug: '' },
+          ],
+        },
+        { $set: { urlSlug: slug } },
+      )
+      .exec();
+
+    deck.urlSlug = slug;
+    return deck;
+  }
+
+  private async findFlashcardDeckByIdentifier(identifier: string) {
+    return this.flashcardModel
+      .findOne(this.buildFlashcardDeckIdentifierQuery(identifier))
+      .exec();
+  }
+
   private validateSentenceBuilderPayload(data: any, items: any[]) {
     const title = String(data?.title || '').trim();
     const description = String(data?.description || '').trim();
@@ -350,6 +439,181 @@ export class ArenaService {
       expected,
       mistakes,
       isCorrect: mistakes.length === 0,
+    };
+  }
+
+  async saveMnemonicBestResult(
+    userId: string,
+    body: {
+      mode?: string;
+      score?: number;
+      total?: number;
+      elapsedMemorizeMs?: number;
+    },
+  ) {
+    const mode = this.normalizeMnemonicMode(String(body?.mode || 'digits'));
+    const score = Math.max(0, Number(body?.score) || 0);
+    const total = Math.max(1, Number(body?.total) || 1);
+    const elapsedMemorizeMs = Math.max(0, Number(body?.elapsedMemorizeMs) || 0);
+
+    if (score > total) {
+      throw new BadRequestException('Mnemonic natijasi noto‘g‘ri');
+    }
+
+    const accuracy = total ? Math.round((score / total) * 100) : 0;
+    const query = {
+      userId: new Types.ObjectId(userId),
+      mode,
+    };
+    const existing = await this.mnemonicResultModel.findOne(query).lean().exec();
+
+    const shouldReplace =
+      !existing ||
+      score > existing.score ||
+      (score === existing.score &&
+        elapsedMemorizeMs < existing.elapsedMemorizeMs);
+
+    if (!shouldReplace) {
+      return {
+        saved: false,
+        replaced: false,
+        best: existing,
+      };
+    }
+
+    const best = await this.mnemonicResultModel.findOneAndUpdate(
+      query,
+      {
+        $set: {
+          score,
+          total,
+          elapsedMemorizeMs,
+          accuracy,
+        },
+      },
+      {
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true,
+      },
+    );
+
+    return {
+      saved: true,
+      replaced: Boolean(existing),
+      best,
+    };
+  }
+
+  async getMnemonicLeaderboard(mode: string, currentUserId?: string) {
+    const normalizedMode = this.normalizeMnemonicMode(mode);
+    const topResults = await this.mnemonicResultModel
+      .find({ mode: normalizedMode })
+      .sort({ score: -1, elapsedMemorizeMs: 1, updatedAt: 1 })
+      .limit(20)
+      .populate(
+        'userId',
+        '_id username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
+
+    const leaderboard = topResults.map((item: any, index) => ({
+      rank: index + 1,
+      score: item.score,
+      total: item.total,
+      accuracy: item.accuracy,
+      elapsedMemorizeMs: item.elapsedMemorizeMs,
+      updatedAt: item.updatedAt,
+      user: item.userId
+        ? {
+            _id: item.userId._id,
+            username: item.userId.username,
+            nickname: item.userId.nickname,
+            avatar: item.userId.avatar,
+            premiumStatus: item.userId.premiumStatus,
+            selectedProfileDecorationId:
+              item.userId.selectedProfileDecorationId || null,
+            customProfileDecorationImage:
+              item.userId.customProfileDecorationImage || null,
+          }
+        : null,
+    }));
+
+    let currentUserBest:
+      | {
+          rank: number;
+          score: number;
+          total: number;
+          accuracy: number;
+          elapsedMemorizeMs: number;
+          updatedAt: Date | undefined;
+          user: {
+            _id: Types.ObjectId;
+            username: string;
+            nickname: string;
+            avatar: string;
+            premiumStatus: string;
+            selectedProfileDecorationId: string | null;
+            customProfileDecorationImage: string | null;
+          } | null;
+        }
+      | null = null;
+
+    if (currentUserId) {
+      const current = await this.mnemonicResultModel
+        .findOne({
+          userId: new Types.ObjectId(currentUserId),
+          mode: normalizedMode,
+        })
+        .populate(
+          'userId',
+          '_id username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+        )
+        .lean()
+        .exec();
+
+      if (current) {
+        const populatedUser = current.userId as any;
+        const betterCount = await this.mnemonicResultModel.countDocuments({
+          mode: normalizedMode,
+          $or: [
+            { score: { $gt: current.score } },
+            {
+              score: current.score,
+              elapsedMemorizeMs: { $lt: current.elapsedMemorizeMs },
+            },
+          ],
+        });
+
+        currentUserBest = {
+          rank: betterCount + 1,
+          score: current.score,
+          total: current.total,
+          accuracy: current.accuracy,
+          elapsedMemorizeMs: current.elapsedMemorizeMs,
+          updatedAt: (current as any).updatedAt,
+          user: populatedUser
+            ? {
+                _id: populatedUser._id,
+                username: populatedUser.username,
+                nickname: populatedUser.nickname,
+                avatar: populatedUser.avatar,
+                premiumStatus: populatedUser.premiumStatus,
+                selectedProfileDecorationId:
+                  populatedUser.selectedProfileDecorationId || null,
+                customProfileDecorationImage:
+                  populatedUser.customProfileDecorationImage || null,
+              }
+            : null,
+        };
+      }
+    }
+
+    return {
+      mode: normalizedMode,
+      leaderboard,
+      currentUserBest,
     };
   }
 
@@ -1022,6 +1286,7 @@ export class ArenaService {
       ...data,
       title,
       cards,
+      urlSlug: await this.generateUniqueFlashcardDeckSlug(),
       createdBy: new Types.ObjectId(userId),
     });
     return createdDeck.save();
@@ -1032,7 +1297,7 @@ export class ArenaService {
     userId: string,
     data: any,
   ): Promise<FlashcardDeckDocument> {
-    const deck = await this.flashcardModel.findById(deckId).exec();
+    const deck = await this.findFlashcardDeckByIdentifier(deckId);
     if (!deck) throw new NotFoundException('Lugat topilmadi');
 
     if (deck.createdBy.toString() !== userId) {
@@ -1059,6 +1324,8 @@ export class ArenaService {
     deck.cards = cards as any;
     deck.isPublic = data?.isPublic !== false;
 
+    await this.ensureFlashcardDeckSlug(deck);
+
     return deck.save();
   }
 
@@ -1070,14 +1337,14 @@ export class ArenaService {
     deletedDeckId: string;
     deletedProgressCount: number;
   }> {
-    const deck = await this.flashcardModel.findById(deckId).exec();
+    const deck = await this.findFlashcardDeckByIdentifier(deckId);
     if (!deck) throw new NotFoundException('Lugat topilmadi');
 
     if (deck.createdBy.toString() !== userId) {
       throw new ForbiddenException("Faqat lug'at yaratuvchisi uni o'chira oladi");
     }
 
-    const deckObjectId = new Types.ObjectId(deckId);
+    const deckObjectId = new Types.ObjectId(deck._id);
     const deletedProgress = await this.progressModel.deleteMany({
       deckId: deckObjectId,
     });
@@ -1115,6 +1382,10 @@ export class ArenaService {
       this.flashcardModel.countDocuments(query),
     ]);
 
+    await Promise.all(
+      decks.map((deck) => this.ensureFlashcardDeckSlug(deck as any)),
+    );
+
     return {
       data: decks.map((deck: any) => {
         const { __v, ...safeDeck } = deck.toObject ? deck.toObject() : deck;
@@ -1132,16 +1403,18 @@ export class ArenaService {
     userId?: string,
   ): Promise<any> {
     const deck = await this.flashcardModel
-      .findById(deckId)
+      .findOne(this.buildFlashcardDeckIdentifierQuery(deckId))
       .populate('createdBy', 'nickname avatar')
       .populate('members.userId', 'nickname avatar');
     if (!deck) throw new NotFoundException('Lugat topilmadi');
+
+    await this.ensureFlashcardDeckSlug(deck as any);
 
     let progressList: FlashcardProgressDocument[] = [];
     if (userId) {
       progressList = await this.progressModel.find({
         userId: new Types.ObjectId(userId),
-        deckId: new Types.ObjectId(deckId),
+        deckId: new Types.ObjectId(deck._id),
       });
     }
 
@@ -1171,7 +1444,7 @@ export class ArenaService {
     deckId: string,
     userId: string,
   ): Promise<FlashcardDeckDocument> {
-    const deck = await this.flashcardModel.findById(deckId);
+    const deck = await this.findFlashcardDeckByIdentifier(deckId);
     if (!deck) throw new NotFoundException('Lugat topilmadi');
 
     const userObjectId = new Types.ObjectId(userId);
@@ -1189,7 +1462,7 @@ export class ArenaService {
     deckId: string,
     userId: string,
   ): Promise<FlashcardDeckDocument> {
-    const deck = await this.flashcardModel.findById(deckId);
+    const deck = await this.findFlashcardDeckByIdentifier(deckId);
     if (!deck) throw new NotFoundException('Lugat topilmadi');
 
     if (deck.createdBy.toString() === userId) {
@@ -1201,7 +1474,7 @@ export class ArenaService {
     // Optional: cleanup progress when leaving
     await this.progressModel.deleteMany({
       userId: new Types.ObjectId(userId),
-      deckId: new Types.ObjectId(deckId),
+      deckId: new Types.ObjectId(deck._id),
     });
 
     return deck.save();
@@ -1213,7 +1486,7 @@ export class ArenaService {
     userId: string,
     quality: number,
   ): Promise<any> {
-    const deck = await this.flashcardModel.findById(deckId);
+    const deck = await this.findFlashcardDeckByIdentifier(deckId);
     if (!deck) throw new NotFoundException('Lugat topilmadi');
 
     const card = deck.cards.find((c: any) => c._id.toString() === cardId);
@@ -1227,14 +1500,14 @@ export class ArenaService {
 
     let progress = await this.progressModel.findOne({
       userId: new Types.ObjectId(userId),
-      deckId: new Types.ObjectId(deckId),
+      deckId: new Types.ObjectId(deck._id),
       cardId: cardId,
     });
 
     if (!progress) {
       progress = new this.progressModel({
         userId: new Types.ObjectId(userId),
-        deckId: new Types.ObjectId(deckId),
+        deckId: new Types.ObjectId(deck._id),
         cardId: cardId,
       });
     }

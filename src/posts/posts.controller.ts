@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { PostsService } from './posts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PostContentDto, PostReplyDto } from './dto/post.dto';
 
 @Controller('posts')
 export class PostsController {
@@ -19,7 +20,7 @@ export class PostsController {
 
   @UseGuards(JwtAuthGuard)
   @Post()
-  createPost(@Request() req, @Body() body: { content: string }) {
+  createPost(@Request() req, @Body() body: PostContentDto) {
     return this.postsService.createPost(req.user._id.toString(), body.content);
   }
 
@@ -28,7 +29,7 @@ export class PostsController {
   updatePost(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: { content: string },
+    @Body() body: PostContentDto,
   ) {
     return this.postsService.updatePost(
       id,
@@ -84,7 +85,7 @@ export class PostsController {
   addComment(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: { content: string },
+    @Body() body: PostContentDto,
   ) {
     return this.postsService.addComment(
       id,
@@ -99,7 +100,7 @@ export class PostsController {
     @Request() req,
     @Param('id') id: string,
     @Param('commentId') commentId: string,
-    @Body() body: { content: string; replyToUser?: string },
+    @Body() body: PostReplyDto,
   ) {
     return this.postsService.addReply(
       id,

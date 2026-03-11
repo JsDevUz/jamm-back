@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PromoCodeSchema = exports.PromoCode = void 0;
 const mongoose_1 = require("@nestjs/mongoose");
 let PromoCode = class PromoCode {
+    displayCode;
     code;
     validFrom;
     validUntil;
@@ -20,6 +21,10 @@ let PromoCode = class PromoCode {
     maxUses;
 };
 exports.PromoCode = PromoCode;
+__decorate([
+    (0, mongoose_1.Prop)({ required: true, trim: true, uppercase: true, index: true }),
+    __metadata("design:type", String)
+], PromoCode.prototype, "displayCode", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ required: true, unique: true }),
     __metadata("design:type", String)

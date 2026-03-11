@@ -26,6 +26,8 @@ let User = class User {
     premiumExpiresAt;
     hasUsedPromo;
     bio;
+    selectedProfileDecorationId;
+    customProfileDecorationImage;
     followers;
     following;
     isVerified;
@@ -98,6 +100,14 @@ __decorate([
     (0, mongoose_1.Prop)({ default: '' }),
     __metadata("design:type", String)
 ], User.prototype, "bio", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: String, default: null }),
+    __metadata("design:type", Object)
+], User.prototype, "selectedProfileDecorationId", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: String, default: null }),
+    __metadata("design:type", Object)
+], User.prototype, "customProfileDecorationImage", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: [{ type: mongoose_2.Types.ObjectId, ref: 'User' }], default: [] }),
     __metadata("design:type", Array)

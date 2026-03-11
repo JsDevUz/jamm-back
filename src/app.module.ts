@@ -17,6 +17,8 @@ import { ArenaModule } from './arena/arena.module';
 import { BlogsModule } from './blogs/blogs.module';
 import { AppSettingsModule } from './app-settings/app-settings.module';
 import { AppAccessGuard } from './auth/guards/app-access.guard';
+import { CommonModule } from './common/common.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -28,6 +30,7 @@ import { AppAccessGuard } from './auth/guards/app-access.guard';
         uri: configService.get<string>('MONGODB_URI'),
       }),
     }),
+    CommonModule,
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
@@ -46,6 +49,7 @@ import { AppAccessGuard } from './auth/guards/app-access.guard';
     ArenaModule,
     BlogsModule,
     AppSettingsModule,
+    AdminModule,
   ],
   providers: [
     {

@@ -58,6 +58,12 @@ export class User {
   @Prop({ default: '' })
   bio: string;
 
+  @Prop({ type: String, default: null })
+  selectedProfileDecorationId: string | null;
+
+  @Prop({ type: String, default: null })
+  customProfileDecorationImage: string | null;
+
   @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
   followers: Types.ObjectId[];
 

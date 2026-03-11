@@ -12,16 +12,22 @@ const mongoose_1 = require("@nestjs/mongoose");
 const users_service_1 = require("./users.service");
 const users_controller_1 = require("./users.controller");
 const user_schema_1 = require("./schemas/user.schema");
+const profile_decoration_schema_1 = require("./schemas/profile-decoration.schema");
 const r2_service_1 = require("../common/services/r2.service");
 const chats_module_1 = require("../chats/chats.module");
+const app_settings_module_1 = require("../app-settings/app-settings.module");
 let UsersModule = class UsersModule {
 };
 exports.UsersModule = UsersModule;
 exports.UsersModule = UsersModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            mongoose_1.MongooseModule.forFeature([{ name: user_schema_1.User.name, schema: user_schema_1.UserSchema }]),
+            mongoose_1.MongooseModule.forFeature([
+                { name: user_schema_1.User.name, schema: user_schema_1.UserSchema },
+                { name: profile_decoration_schema_1.ProfileDecoration.name, schema: profile_decoration_schema_1.ProfileDecorationSchema },
+            ]),
             (0, common_1.forwardRef)(() => chats_module_1.ChatsModule),
+            app_settings_module_1.AppSettingsModule,
         ],
         providers: [users_service_1.UsersService, r2_service_1.R2Service],
         controllers: [users_controller_1.UsersController],

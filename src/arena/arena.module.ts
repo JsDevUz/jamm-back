@@ -29,6 +29,10 @@ import {
   SentenceBuilderAttempt,
   SentenceBuilderAttemptSchema,
 } from './schemas/sentence-builder-attempt.schema';
+import {
+  MnemonicResult,
+  MnemonicResultSchema,
+} from './schemas/mnemonic-result.schema';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 
@@ -49,11 +53,16 @@ import { UsersModule } from '../users/users.module';
         name: SentenceBuilderAttempt.name,
         schema: SentenceBuilderAttemptSchema,
       },
+      {
+        name: MnemonicResult.name,
+        schema: MnemonicResultSchema,
+      },
     ]),
     AuthModule,
     UsersModule,
   ],
   controllers: [ArenaController],
   providers: [ArenaService, ArenaGateway],
+  exports: [ArenaService],
 })
 export class ArenaModule {}

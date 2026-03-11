@@ -4,26 +4,254 @@ import {
   InternalServerErrorException,
   Inject,
   forwardRef,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { User, UserDocument } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ChatsService } from '../chats/chats.service';
+import {
+  ProfileDecoration,
+  ProfileDecorationDocument,
+} from './schemas/profile-decoration.schema';
 
 import { R2Service } from '../common/services/r2.service';
 import {
   APP_TEXT_LIMITS,
   assertMaxChars,
 } from '../common/limits/app-limits';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 
 @Injectable()
 export class UsersService {
+  private readonly defaultProfileDecorations = [
+    {
+      key: 'sparkle-gold',
+      label: 'Golden Spark',
+      emoji: '✨',
+      animation: 'sparkle',
+      premiumOnly: true,
+      sortOrder: 1,
+    },
+    {
+      key: 'fire-pop',
+      label: 'Fire Pop',
+      emoji: '🔥',
+      animation: 'pulse',
+      premiumOnly: true,
+      sortOrder: 2,
+    },
+    {
+      key: 'rocket-wave',
+      label: 'Rocket Wave',
+      emoji: '🚀',
+      animation: 'float',
+      premiumOnly: true,
+      sortOrder: 3,
+    },
+    {
+      key: 'diamond-spin',
+      label: 'Diamond Spin',
+      emoji: '💎',
+      animation: 'spin',
+      premiumOnly: true,
+      sortOrder: 4,
+    },
+    {
+      key: 'star-wiggle',
+      label: 'Star Wiggle',
+      emoji: '🌟',
+      animation: 'wiggle',
+      premiumOnly: true,
+      sortOrder: 5,
+    },
+    {
+      key: 'heart-float',
+      label: 'Heart Float',
+      emoji: '💖',
+      animation: 'float',
+      premiumOnly: true,
+      sortOrder: 6,
+    },
+  ];
+
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(ProfileDecoration.name)
+    private profileDecorationModel: Model<ProfileDecorationDocument>,
     private r2Service: R2Service,
     @Inject(forwardRef(() => ChatsService)) private chatsService: ChatsService,
+    private appSettingsService: AppSettingsService,
   ) {}
+
+  private async ensureDefaultProfileDecorations() {
+    await this.profileDecorationModel.bulkWrite(
+      this.defaultProfileDecorations.map((decoration) => ({
+        updateOne: {
+          filter: { key: decoration.key },
+          update: { $setOnInsert: decoration },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
+    );
+  }
+
+  async getProfileDecorations() {
+    await this.ensureDefaultProfileDecorations();
+
+    return this.profileDecorationModel
+      .find({ isActive: true })
+      .sort({ sortOrder: 1, createdAt: 1 })
+      .lean()
+      .exec();
+  }
+
+  async updateProfileDecoration(userId: string, decorationId?: string | null) {
+    if (!decorationId) {
+      return this.userModel
+        .findByIdAndUpdate(
+          userId,
+          { $set: { selectedProfileDecorationId: null } },
+          { new: true },
+        )
+        .select('-password')
+        .lean()
+        .exec();
+    }
+
+    await this.ensureDefaultProfileDecorations();
+
+    const [user, decoration] = await Promise.all([
+      this.userModel
+        .findById(userId)
+        .select('premiumStatus selectedProfileDecorationId')
+        .lean()
+        .exec(),
+      this.profileDecorationModel
+        .findOne({ key: decorationId, isActive: true })
+        .lean()
+        .exec(),
+    ]);
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    if (decorationId === 'premium-badge') {
+      if (user.premiumStatus !== 'active') {
+        throw new ForbiddenException(
+          'Bu profil dekoratsiyasi faqat premium obunachilar uchun',
+        );
+      }
+
+      return this.userModel
+        .findByIdAndUpdate(
+          userId,
+          { $set: { selectedProfileDecorationId: 'premium-badge' } },
+          { new: true },
+        )
+        .select('-password')
+        .lean()
+        .exec();
+    }
+
+    if (decorationId === 'custom-upload') {
+      if (user.premiumStatus !== 'active') {
+        throw new ForbiddenException(
+          'Bu profil dekoratsiyasi faqat premium obunachilar uchun',
+        );
+      }
+
+      const refreshedUser = await this.userModel
+        .findById(userId)
+        .select('customProfileDecorationImage')
+        .lean()
+        .exec();
+
+      if (!refreshedUser?.customProfileDecorationImage) {
+        throw new BadRequestException(
+          'Avval custom dekoratsiya rasmini yuklang',
+        );
+      }
+
+      return this.userModel
+        .findByIdAndUpdate(
+          userId,
+          { $set: { selectedProfileDecorationId: 'custom-upload' } },
+          { new: true },
+        )
+        .select('-password')
+        .lean()
+        .exec();
+    }
+
+    if (!decoration) {
+      throw new BadRequestException('Dekoratsiya topilmadi');
+    }
+
+    if (decoration.premiumOnly && user.premiumStatus !== 'active') {
+      throw new ForbiddenException(
+        'Bu profil dekoratsiyasi faqat premium obunachilar uchun',
+      );
+    }
+
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $set: { selectedProfileDecorationId: decoration.key } },
+        { new: true },
+      )
+      .select('-password')
+      .lean()
+      .exec();
+  }
+
+  async updateProfileDecorationImage(
+    userId: string,
+    file: Express.Multer.File,
+  ) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('premiumStatus customProfileDecorationImage')
+      .lean()
+      .exec();
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    if (user.premiumStatus !== 'active') {
+      throw new ForbiddenException(
+        'Custom profil dekoratsiyasi faqat premium obunachilar uchun',
+      );
+    }
+
+    const uploadedImage = await this.r2Service.uploadFile(
+      file,
+      'profile-decorations/custom',
+    );
+
+    if (user.customProfileDecorationImage) {
+      await this.r2Service.deleteFile(user.customProfileDecorationImage);
+    }
+
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        {
+          $set: {
+            customProfileDecorationImage: uploadedImage,
+            selectedProfileDecorationId: 'custom-upload',
+          },
+        },
+        { new: true },
+      )
+      .select('-password')
+      .lean()
+      .exec();
+  }
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
     assertMaxChars(
@@ -59,32 +287,34 @@ export class UsersService {
   async searchUsers(
     query: string,
     currentUserId: string,
-  ): Promise<UserDocument[]> {
+  ): Promise<any[]> {
     if (!query) return [];
 
     const regex = new RegExp(query, 'i');
 
     const safeFields =
-      '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen';
+      '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen selectedProfileDecorationId customProfileDecorationImage';
 
-    return this.userModel
+    const users = await this.userModel
       .find({
         _id: { $ne: currentUserId },
         $or: [{ username: regex }, { nickname: regex }],
       })
       .select(safeFields)
       .limit(10)
+      .lean()
       .exec();
+    return this.appSettingsService.decorateUsersPayload(users as any[]);
   }
 
   async searchGlobal(
     query: string,
     currentUserId: string,
-  ): Promise<UserDocument[]> {
+  ): Promise<any[]> {
     if (!query) return [];
 
     const safeFields =
-      '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen';
+      '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen selectedProfileDecorationId customProfileDecorationImage';
 
     const isJammId = /^\d+$/.test(query);
     const filter: any = {
@@ -98,17 +328,25 @@ export class UsersService {
       filter.$or = [{ username: regex }, { nickname: regex }];
     }
 
-    return this.userModel.find(filter).select(safeFields).limit(10).exec();
+    const users = await this.userModel
+      .find(filter)
+      .select(safeFields)
+      .limit(10)
+      .lean()
+      .exec();
+    return this.appSettingsService.decorateUsersPayload(users as any[]);
   }
 
-  async getAllUsers(currentUserId: string): Promise<UserDocument[]> {
+  async getAllUsers(currentUserId: string): Promise<any[]> {
     const safeFields =
-      '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen';
-    return this.userModel
+      '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen selectedProfileDecorationId customProfileDecorationImage';
+    const users = await this.userModel
       .find({ _id: { $ne: currentUserId } })
       .select(safeFields)
       .limit(100)
+      .lean()
       .exec();
+    return this.appSettingsService.decorateUsersPayload(users as any[]);
   }
   async updateProfile(
     userId: string,
@@ -213,7 +451,7 @@ export class UsersService {
     const obj = (user as any).toObject();
     const currentId = currentUserId ? new Types.ObjectId(currentUserId) : null;
 
-    return {
+    return this.appSettingsService.decorateUserPayload({
       _id: obj._id,
       jammId: obj.jammId,
       username: obj.username,
@@ -221,6 +459,8 @@ export class UsersService {
       avatar: obj.avatar,
       bio: obj.bio || '',
       premiumStatus: obj.premiumStatus,
+      selectedProfileDecorationId: obj.selectedProfileDecorationId || null,
+      customProfileDecorationImage: obj.customProfileDecorationImage || null,
       followersCount: obj.followers?.length || 0,
       followingCount: obj.following?.length || 0,
       isFollowing: currentId
@@ -229,7 +469,7 @@ export class UsersService {
           )
         : false,
       createdAt: obj.createdAt,
-    };
+    });
   }
 
   async completeOnboarding(

@@ -1,6 +1,7 @@
 import { Document } from 'mongoose';
 export type PromoCodeDocument = PromoCode & Document;
 export declare class PromoCode {
+    displayCode: string;
     code: string;
     validFrom: Date;
     validUntil: Date;
@@ -27,6 +28,15 @@ export declare const PromoCodeSchema: import("mongoose").Schema<PromoCode, impor
 }, "id"> & {
     id: string;
 }, {
+    displayCode?: import("mongoose").SchemaDefinitionProperty<string, PromoCode, Document<unknown, {}, PromoCode, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<PromoCode & {
+        _id: import("mongoose").Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
     code?: import("mongoose").SchemaDefinitionProperty<string, PromoCode, Document<unknown, {}, PromoCode, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<PromoCode & {

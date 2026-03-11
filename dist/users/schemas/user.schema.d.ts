@@ -14,6 +14,8 @@ export declare class User {
     premiumExpiresAt: Date;
     hasUsedPromo: boolean;
     bio: string;
+    selectedProfileDecorationId: string | null;
+    customProfileDecorationImage: string | null;
     followers: Types.ObjectId[];
     following: Types.ObjectId[];
     isVerified: boolean;
@@ -151,6 +153,24 @@ export declare const UserSchema: import("mongoose").Schema<User, import("mongoos
         id: string;
     }> | undefined;
     bio?: import("mongoose").SchemaDefinitionProperty<string, User, Document<unknown, {}, User, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<User & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    selectedProfileDecorationId?: import("mongoose").SchemaDefinitionProperty<string | null, User, Document<unknown, {}, User, {
+        id: string;
+    }, import("mongoose").DefaultSchemaOptions> & Omit<User & {
+        _id: Types.ObjectId;
+    } & {
+        __v: number;
+    }, "id"> & {
+        id: string;
+    }> | undefined;
+    customProfileDecorationImage?: import("mongoose").SchemaDefinitionProperty<string | null, User, Document<unknown, {}, User, {
         id: string;
     }, import("mongoose").DefaultSchemaOptions> & Omit<User & {
         _id: Types.ObjectId;

@@ -31,6 +31,7 @@ import {
   assertMaxChars,
   getTierLimit,
 } from '../common/limits/app-limits';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 
 @Injectable()
 export class ChatsService implements OnModuleInit {
@@ -42,12 +43,23 @@ export class ChatsService implements OnModuleInit {
     private r2Service: R2Service,
     private encryptionService: EncryptionService,
     private premiumService: PremiumService,
+    private appSettingsService: AppSettingsService,
   ) {}
 
   async onModuleInit() {
     await this.backfillJammIds();
     await this.backfillPrivateUrls();
     await this.backfillAdmins();
+  }
+
+  private buildSearchRegex(query: string) {
+    const value = String(query || '').trim();
+    if (!value) {
+      throw new BadRequestException('Qidiruv so\'rovini kiriting');
+    }
+
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(escaped, 'i');
   }
 
   private async backfillAdmins() {
@@ -125,25 +137,79 @@ export class ChatsService implements OnModuleInit {
   }
 
   private decryptMessage(message: any, strategy: EncryptionStrategy): any {
-    if (!message.isEncrypted) return message;
+    const nextMessage = { ...message };
+
+    if (nextMessage.replayTo?.isEncrypted) {
+      nextMessage.replayTo = this.decryptMessage(nextMessage.replayTo, strategy);
+    }
+
+    if (!nextMessage.isEncrypted) return nextMessage;
 
     try {
       const decrypted = strategy.decrypt({
-        encryptedContent: message.content,
-        iv: message.iv,
-        authTag: message.authTag,
-        keyVersion: message.keyVersion || 0,
+        encryptedContent: nextMessage.content,
+        iv: nextMessage.iv,
+        authTag: nextMessage.authTag,
+        keyVersion: nextMessage.keyVersion || 0,
       });
-      return { ...message, content: decrypted };
+      return { ...nextMessage, content: decrypted };
     } catch (error) {
-      console.error(`Failed to decrypt message ${message._id}:`, error);
-      return { ...message, content: '[Decryption Error]' };
+      console.error(`Failed to decrypt message ${nextMessage._id}:`, error);
+      return { ...nextMessage, content: '[Decryption Error]' };
+    }
+  }
+
+  private decryptLastMessagePreview(chat: any): string {
+    if (!chat?.lastMessage) return '';
+    if ((chat as any).lastMessageEncryptionType === 'none') {
+      return chat.lastMessage;
+    }
+
+    const iv = (chat as any).lastMessageIv || '';
+    const authTag = (chat as any).lastMessageAuthTag || '';
+    if (!iv || !authTag) {
+      return '';
+    }
+
+    try {
+      const strategy = this.getEncryptionStrategy(chat as any);
+      return strategy.decrypt({
+        encryptedContent: chat.lastMessage,
+        iv,
+        authTag,
+        keyVersion: (chat as any).lastMessageKeyVersion || 0,
+      });
+    } catch (error) {
+      console.error(
+        `Failed to decrypt lastMessage preview for chat ${chat._id}:`,
+        error,
+      );
+      return '';
     }
   }
 
   private async ensureUsersCanJoinMoreGroups(userIds: string[]) {
+    const users = await this.userModel
+      .find({ _id: { $in: userIds.map((id) => new Types.ObjectId(id)) } })
+      .select('_id username premiumStatus')
+      .lean()
+      .exec();
+
+    const usersById = new Map(users.map((user) => [String(user._id), user]));
+
     for (const userId of userIds) {
-      const [user, joinedCount] = await Promise.all([
+      const targetUser = usersById.get(String(userId));
+      const officialProfile =
+        await this.appSettingsService.getOfficialProfileByUsername(
+          targetUser?.username,
+        );
+      if (officialProfile?.disableGroupInvites) {
+        throw new ForbiddenException(
+          `${targetUser?.username || 'Rasmiy profil'} guruhga qo'shilmaydi`,
+        );
+      }
+
+      const [userRecord, joinedCount] = await Promise.all([
         this.userModel.findById(userId).select('premiumStatus').lean().exec(),
         this.chatModel.countDocuments({
           isGroup: true,
@@ -152,13 +218,30 @@ export class ChatsService implements OnModuleInit {
         }),
       ]);
 
-      const limit = getTierLimit(APP_LIMITS.groupsJoined, user?.premiumStatus);
+      const limit = getTierLimit(
+        APP_LIMITS.groupsJoined,
+        userRecord?.premiumStatus,
+      );
       if (joinedCount >= limit) {
         throw new ForbiddenException(
           `Foydalanuvchi maksimal ${limit} ta guruhga qo'shila oladi`,
         );
       }
     }
+  }
+
+  private async decorateChatMembers(members: any[] = []) {
+    return this.appSettingsService.decorateUsersPayload(
+      members.map((member) =>
+        typeof member?.toObject === 'function' ? member.toObject() : member,
+      ),
+    );
+  }
+
+  private async decorateChatMessageUser(user: any) {
+    if (!user) return user;
+    const normalized = typeof user.toObject === 'function' ? user.toObject() : user;
+    return this.appSettingsService.decorateUserPayload(normalized);
   }
 
   async getUserChats(
@@ -172,7 +255,7 @@ export class ChatsService implements OnModuleInit {
         .find({ members: new Types.ObjectId(userId) })
         .populate(
           'members',
-          'username nickname avatar premiumStatus bio jammId',
+          'username nickname avatar premiumStatus bio jammId selectedProfileDecorationId customProfileDecorationImage',
         )
         .sort({ updatedAt: -1 })
         .skip(skip)
@@ -190,34 +273,11 @@ export class ChatsService implements OnModuleInit {
           readBy: { $ne: new Types.ObjectId(userId) },
         });
 
-        // Decrypt lastMessage preview
-        let decryptedLastMessage = chat.lastMessage;
-        if (
-          (chat as any).lastMessageEncryptionType !== 'none' &&
-          chat.lastMessage
-        ) {
-          try {
-            const strategy = this.getEncryptionStrategy(chat as any);
-            decryptedLastMessage = strategy.decrypt({
-              encryptedContent: chat.lastMessage,
-              iv: (chat as any).lastMessageIv || '',
-              authTag: (chat as any).lastMessageAuthTag || '',
-              keyVersion: (chat as any).lastMessageKeyVersion || 0,
-            });
-          } catch (error) {
-            console.error(
-              `Failed to decrypt lastMessage for chat ${chat._id}:`,
-              error,
-            );
-            decryptedLastMessage = '[Decryption Error]';
-          }
-        }
+        const decryptedLastMessage = this.decryptLastMessagePreview(chat);
 
         const chatObj = (chat as any).toObject
           ? (chat as any).toObject()
           : (chat as any);
-        console.log(chatObj, 'lllll');
-
         return {
           _id: chatObj._id,
           jammId: chatObj.jammId,
@@ -226,7 +286,7 @@ export class ChatsService implements OnModuleInit {
           avatar: chatObj.avatar,
           isGroup: chatObj.isGroup,
           privateurl: chatObj.privateurl,
-          members: chatObj.members,
+          members: await this.decorateChatMembers(chatObj.members || []),
           createdBy: chatObj.createdBy,
           admins: chatObj.admins,
           isSavedMessages: chatObj.isSavedMessages,
@@ -239,8 +299,6 @@ export class ChatsService implements OnModuleInit {
         };
       }),
     );
-    console.log(chatsWithUnread);
-
     return {
       data: chatsWithUnread,
       total,
@@ -248,6 +306,69 @@ export class ChatsService implements OnModuleInit {
       limit: pagination.limit,
       totalPages: Math.ceil(total / pagination.limit),
     };
+  }
+
+  async searchPrivateUsers(userId: string, query: string, limit = 10) {
+    const regex = this.buildSearchRegex(query);
+    const users = await this.userModel
+      .find({
+        _id: { $ne: new Types.ObjectId(userId) },
+        $or: [{ username: regex }, { nickname: regex }],
+      })
+      .select(
+        'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .limit(Math.max(1, Math.min(10, Number(limit) || 10)))
+      .lean()
+      .exec();
+
+    const decoratedUsers = await this.appSettingsService.decorateUsersPayload(
+      users as any[],
+    );
+
+    return decoratedUsers.map((user: any) => ({
+      id: user._id.toString(),
+      name: user.nickname || user.username,
+      username: user.username,
+      avatar: user.avatar || '',
+      premiumStatus: user.premiumStatus || 'inactive',
+      selectedProfileDecorationId: user.selectedProfileDecorationId || null,
+      customProfileDecorationImage: user.customProfileDecorationImage || null,
+      isOfficialProfile: Boolean(user.isOfficialProfile),
+      officialBadgeKey: user.officialBadgeKey || null,
+      officialBadgeLabel: user.officialBadgeLabel || null,
+      disableCalls: Boolean(user.disableCalls),
+      disableGroupInvites: Boolean(user.disableGroupInvites),
+    }));
+  }
+
+  async searchUserGroups(userId: string, query: string, limit = 10) {
+    const regex = this.buildSearchRegex(query);
+    const groups = await this.chatModel
+      .find({
+        isGroup: true,
+        members: new Types.ObjectId(userId),
+        name: regex,
+      })
+      .select(
+        'name avatar jammId members lastMessage lastMessageIv lastMessageAuthTag lastMessageEncryptionType lastMessageKeyVersion lastMessageAt updatedAt privateurl',
+      )
+      .sort({ updatedAt: -1 })
+      .limit(Math.max(1, Math.min(10, Number(limit) || 10)))
+      .lean()
+      .exec();
+
+    return groups.map((group) => {
+      return {
+        id: group._id.toString(),
+        urlSlug: group.jammId ? String(group.jammId) : group._id.toString(),
+        name: group.name || 'Group',
+        avatar: group.avatar || '',
+        membersCount: Array.isArray(group.members) ? group.members.length : 0,
+        lastMessage: this.decryptLastMessagePreview(group),
+        lastMessageAt: group.lastMessageAt || null,
+      };
+    });
   }
 
   async createChat(
@@ -531,7 +652,10 @@ export class ChatsService implements OnModuleInit {
         _id: chatId,
         members: new Types.ObjectId(userId),
       })
-      .populate('members', 'username nickname avatar premiumStatus')
+      .populate(
+        'members',
+        'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+      )
       .exec();
 
     if (!chat) throw new NotFoundException("Chat topilmadi yoki huquq yo'q");
@@ -648,6 +772,18 @@ export class ChatsService implements OnModuleInit {
     );
 
     if (!isMember) {
+      const joiningUser = await this.userModel
+        .findById(userId)
+        .select('username')
+        .lean()
+        .exec();
+      const officialProfile =
+        await this.appSettingsService.getOfficialProfileByUsername(
+          joiningUser?.username,
+        );
+      if (officialProfile?.disableGroupInvites) {
+        throw new ForbiddenException('Rasmiy profillar guruhga qo‘shilmaydi');
+      }
       await this.ensureUsersCanJoinMoreGroups([userId]);
       chat.members.push(userObjectId);
       await chat.save();
@@ -659,57 +795,97 @@ export class ChatsService implements OnModuleInit {
   async getChatMessages(
     chatId: string,
     userId: string,
-    pagination: { page: number; limit: number },
+    before?: string,
   ): Promise<any> {
     const chat = await this.getChat(chatId, userId);
     const strategy = this.getEncryptionStrategy(chat);
 
-    const { page, limit } = pagination;
-    const skip = (page - 1) * limit;
+    const chatObjectId = new Types.ObjectId(chatId);
+    const cursorDate =
+      before && !Number.isNaN(new Date(before).getTime()) ? new Date(before) : null;
 
-    const [messagesDesc, total] = await Promise.all([
+    const latestMessage = await this.messageModel
+      .findOne(
+        cursorDate
+          ? {
+              chatId: chatObjectId,
+              createdAt: { $lt: cursorDate },
+            }
+          : { chatId: chatObjectId },
+      )
+      .sort({ createdAt: -1 })
+      .select('_id createdAt')
+      .lean<{ _id: Types.ObjectId; createdAt: Date } | null>();
+
+    if (!latestMessage) {
+      return {
+        data: [],
+        hasMore: false,
+        nextCursor: null,
+      };
+    }
+
+    const dayStart = new Date(latestMessage.createdAt);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const [messages, hasOlderMessage] = await Promise.all([
       this.messageModel
-        .find({ chatId: new Types.ObjectId(chatId) })
-        .populate('senderId', 'username nickname avatar premiumStatus')
+        .find({
+          chatId: chatObjectId,
+          createdAt: {
+            $gte: dayStart,
+            $lt: dayEnd,
+          },
+        })
+        .populate(
+          'senderId',
+          'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+        )
         .populate({
           path: 'replayTo',
           populate: {
             path: 'senderId',
-            select: 'username nickname avatar premiumStatus',
+            select:
+              'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
           },
         })
-        .sort({ createdAt: -1 }) // newest first to skip properly
-        .skip(skip)
-        .limit(limit)
+        .sort({ createdAt: 1 })
         .exec(),
-      this.messageModel.countDocuments({ chatId: new Types.ObjectId(chatId) }),
+      this.messageModel.exists({
+        chatId: chatObjectId,
+        createdAt: { $lt: dayStart },
+      }),
     ]);
 
-    // Reverse the slice back to chronological order (oldest -> newest) for the UI
-    const messages = messagesDesc.reverse();
-
-    const data = messages.map((m) => {
+    const data = await Promise.all(messages.map(async (m) => {
       const decrypted = this.decryptMessage(m.toObject(), strategy);
       return {
         _id: decrypted._id,
         chatId: decrypted.chatId,
-        senderId: decrypted.senderId,
+        senderId: await this.decorateChatMessageUser(decrypted.senderId),
         content: decrypted.content,
         isEdited: decrypted.isEdited,
         isDeleted: decrypted.isDeleted,
         readBy: decrypted.readBy,
-        replayTo: decrypted.replayTo,
+        replayTo: decrypted.replayTo
+          ? {
+              ...decrypted.replayTo,
+              senderId: await this.decorateChatMessageUser(
+                decrypted.replayTo.senderId,
+              ),
+            }
+          : null,
         createdAt: decrypted.createdAt,
         updatedAt: decrypted.updatedAt,
       } as any as MessageDocument;
-    });
+    }));
 
     return {
       data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      hasMore: Boolean(hasOlderMessage),
+      nextCursor: hasOlderMessage ? dayStart.toISOString() : null,
     };
   }
 
@@ -757,7 +933,8 @@ export class ChatsService implements OnModuleInit {
         path: 'replayTo',
         populate: {
           path: 'senderId',
-          select: 'username nickname avatar premiumStatus',
+          select:
+            'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
         },
       },
     ]);
@@ -766,6 +943,14 @@ export class ChatsService implements OnModuleInit {
       populatedMessage.toObject(),
       strategy,
     );
+    decryptedMessage.senderId = await this.decorateChatMessageUser(
+      decryptedMessage.senderId,
+    );
+    if (decryptedMessage.replayTo?.senderId) {
+      decryptedMessage.replayTo.senderId = await this.decorateChatMessageUser(
+        decryptedMessage.replayTo.senderId,
+      );
+    }
 
     const rooms = [`chat_${chatId}`];
     if (chat && chat.members) {
@@ -819,7 +1004,8 @@ export class ChatsService implements OnModuleInit {
         path: 'replayTo',
         populate: {
           path: 'senderId',
-          select: 'username nickname avatar premiumStatus',
+          select:
+            'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
         },
       },
     ]);
@@ -828,6 +1014,14 @@ export class ChatsService implements OnModuleInit {
       populatedMessage.toObject(),
       strategy,
     );
+    decryptedMessage.senderId = await this.decorateChatMessageUser(
+      decryptedMessage.senderId,
+    );
+    if (decryptedMessage.replayTo?.senderId) {
+      decryptedMessage.replayTo.senderId = await this.decorateChatMessageUser(
+        decryptedMessage.replayTo.senderId,
+      );
+    }
 
     const rooms = [`chat_${message.chatId}`];
     if (chat && chat.members) {
@@ -869,7 +1063,8 @@ export class ChatsService implements OnModuleInit {
         path: 'replayTo',
         populate: {
           path: 'senderId',
-          select: 'username nickname avatar premiumStatus',
+          select:
+            'username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
         },
       },
     ]);

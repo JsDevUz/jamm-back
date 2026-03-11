@@ -16,6 +16,9 @@ import {
   APP_TEXT_LIMITS,
   getTierLimit,
 } from '../common/limits/app-limits';
+import { getAllowedOrigins } from '../common/config/cors.config';
+import { verifySocketToken } from '../common/auth/ws-auth.util';
+import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 
 interface KnockEntry {
   displayName: string;
@@ -33,7 +36,7 @@ interface RoomInfo {
 }
 
 @WebSocketGateway({
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: { origin: getAllowedOrigins(), methods: ['GET', 'POST'], credentials: true },
   namespace: '/video',
 })
 export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -41,6 +44,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server;
 
   private rooms = new Map<string, RoomInfo>();
+  private readonly rateLimiter = new SocketRateLimiter();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -50,14 +54,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   async handleConnection(client: Socket) {
     try {
-      const token =
-        client.handshake?.auth?.token ||
-        (client.handshake?.query?.token as string);
-
-      if (token) {
-        const secret =
-          this.configService.get<string>('JWT_SECRET') || 'fallback-secret';
-        const payload = await this.jwtService.verifyAsync(token, { secret });
+      const payload = await verifySocketToken(
+        this.jwtService,
+        this.configService,
+        client,
+      );
+      if (payload) {
         client.data.user = {
           _id: payload.sub,
           email: payload.email,
@@ -104,6 +106,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       title?: string;
     },
   ) {
+    this.rateLimiter.take(`video:create-room:${client.id}`, 5, 60_000);
     const { roomId, displayName, isPrivate = false, title = '' } = data;
 
     const userId = client.data?.user?._id;
@@ -170,6 +173,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; displayName: string },
   ) {
+    this.rateLimiter.take(`video:join-room:${client.id}`, 15, 60_000);
     const { roomId, displayName } = data;
     const room = this.rooms.get(roomId);
 
@@ -237,6 +241,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
+    this.rateLimiter.take(`video:approve-knock:${client.id}`, 30, 60_000);
     const { roomId, peerId } = data;
     const room = this.rooms.get(roomId);
     if (!room || room.creatorSocketId !== client.id) return;
@@ -268,6 +273,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
+    this.rateLimiter.take(`video:reject-knock:${client.id}`, 30, 60_000);
     const { roomId, peerId } = data;
     const room = this.rooms.get(roomId);
     if (!room || room.creatorSocketId !== client.id) return;
@@ -285,6 +291,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
+    this.rateLimiter.take(`video:offer:${client.id}`, 600, 60_000);
     this.server
       .to(data.targetId)
       .emit('offer', { senderId: client.id, sdp: data.sdp });
@@ -295,6 +302,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
+    this.rateLimiter.take(`video:answer:${client.id}`, 600, 60_000);
     this.server
       .to(data.targetId)
       .emit('answer', { senderId: client.id, sdp: data.sdp });
@@ -305,6 +313,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { targetId: string; candidate: any },
   ) {
+    this.rateLimiter.take(`video:ice:${client.id}`, 4000, 60_000);
     this.server.to(data.targetId).emit('ice-candidate', {
       senderId: client.id,
       candidate: data.candidate,
@@ -316,6 +325,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    this.rateLimiter.take(`video:leave-room:${client.id}`, 30, 60_000);
     const { roomId } = data;
     const room = this.rooms.get(roomId);
     if (room) {
@@ -334,6 +344,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    this.rateLimiter.take(`video:screen:${client.id}`, 120, 60_000);
     client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
   }
 
@@ -342,6 +353,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    this.rateLimiter.take(`video:screen:${client.id}`, 120, 60_000);
     client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
   }
 
@@ -352,6 +364,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    this.rateLimiter.take(`video:recording:${client.id}`, 60, 60_000);
     client.to(data.roomId).emit('recording-started', { peerId: client.id });
   }
 
@@ -360,6 +373,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    this.rateLimiter.take(`video:recording:${client.id}`, 60, 60_000);
     client.to(data.roomId).emit('recording-stopped', { peerId: client.id });
   }
 
@@ -370,6 +384,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
+    this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
     if (!room || room.creatorSocketId !== client.id) return;
     this.server.to(data.peerId).emit('force-mute-mic');
@@ -380,6 +395,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
+    this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
     if (!room || room.creatorSocketId !== client.id) return;
     this.server.to(data.peerId).emit('force-mute-cam');
@@ -390,6 +406,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
+    this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
     if (!room || room.creatorSocketId !== client.id) return;
     this.server.to(data.peerId).emit('allow-mic');
@@ -400,6 +417,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
+    this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
     if (!room || room.creatorSocketId !== client.id) return;
     this.server.to(data.peerId).emit('allow-cam');

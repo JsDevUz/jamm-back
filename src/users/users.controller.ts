@@ -13,21 +13,31 @@ import {
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AppSettingsService } from '../app-settings/app-settings.service';
+import { UpdateProfileDecorationDto } from './dto/profile-decoration.dto';
+import { UploadValidationService } from '../common/uploads/upload-validation.service';
+import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly appSettingsService: AppSettingsService,
+    private readonly uploadValidationService: UploadValidationService,
+  ) {}
 
-  private sanitizeUser(user: any) {
+  private async sanitizeUser(user: any) {
     if (!user) return null;
     const obj = typeof user.toObject === 'function' ? user.toObject() : user;
-    return {
+    return this.appSettingsService.decorateUserPayload({
       _id: obj._id,
       jammId: obj.jammId,
       username: obj.username,
@@ -37,6 +47,8 @@ export class UsersController {
       bio: obj.bio,
       gender: obj.gender,
       age: obj.age,
+      selectedProfileDecorationId: obj.selectedProfileDecorationId || null,
+      customProfileDecorationImage: obj.customProfileDecorationImage || null,
       interests: obj.interests || [],
       goals: obj.goals || [],
       level: obj.level,
@@ -45,15 +57,24 @@ export class UsersController {
       isOnboardingCompleted: obj.isOnboardingCompleted,
       isVerified: obj.isVerified,
       createdAt: obj.createdAt,
-    };
+    });
   }
 
   @Post('avatar')
-  @UseInterceptors(FileInterceptor('file'))
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.homeworkPhotoBytes),
+    ),
+  )
   async uploadAvatar(
     @Request() req,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      label: 'Avatar',
+    });
     const user = await this.usersService.updateAvatar(
       req.user._id.toString(),
       file,
@@ -78,6 +99,45 @@ export class UsersController {
     return this.sanitizeUser(user);
   }
 
+  @Get('profile-decorations')
+  async getProfileDecorations() {
+    return this.usersService.getProfileDecorations();
+  }
+
+  @Patch('me/profile-decoration')
+  async updateProfileDecoration(
+    @Request() req,
+    @Body() body: UpdateProfileDecorationDto,
+  ) {
+    const user = await this.usersService.updateProfileDecoration(
+      req.user._id.toString(),
+      body?.decorationId ?? null,
+    );
+    return this.sanitizeUser(user);
+  }
+
+  @Patch('me/profile-decoration-image')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.homeworkPhotoBytes),
+    ),
+  )
+  async uploadProfileDecorationImage(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      label: 'Profil bezagi rasmi',
+    });
+    const user = await this.usersService.updateProfileDecorationImage(
+      req.user._id.toString(),
+      file,
+    );
+    return this.sanitizeUser(user);
+  }
+
   /** Get all users (except current user) */
   @Get()
   async getAllUsers(@Request() req) {
@@ -96,7 +156,7 @@ export class UsersController {
   async searchGlobal(@Query('q') query: string, @Request() req) {
     if (!query) return [];
     const users = await this.usersService.searchGlobal(query, req.user._id);
-    return users.map((u) => this.sanitizeUser(u));
+    return Promise.all(users.map((u) => this.sanitizeUser(u)));
   }
 
   /** Get user by username */
@@ -105,7 +165,7 @@ export class UsersController {
     const user = await this.usersService.findByUsername(username);
     if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
     const { password, ...safe } = (user as any).toObject();
-    return safe;
+    return this.appSettingsService.decorateUserPayload(safe);
   }
 
   /** Toggle follow/unfollow */
