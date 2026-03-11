@@ -19,7 +19,8 @@ export class RedisPresenceService implements OnModuleDestroy {
 
   private client: Redis; // For commands (GET, SET, EXPIRE, etc.)
   private publisher: Redis; // For Pub/Sub publishing
-  private subscriber: Redis; // For Pub/Sub subscribing
+  private subscriber: Redis | null = null; // For Pub/Sub subscribing
+  private isSubscribed = false;
 
   constructor(private readonly configService: ConfigService) {
     const redisUrl =
@@ -33,8 +34,6 @@ export class RedisPresenceService implements OnModuleDestroy {
 
     this.client = new Redis(redisUrl, commonOpts);
     this.publisher = new Redis(redisUrl, commonOpts);
-    this.subscriber = new Redis(redisUrl, commonOpts);
-
     this.client.on('connect', () => this.logger.log('Redis client connected'));
     this.client.on('error', (err) =>
       this.logger.error('Redis client error', err.message),
@@ -42,15 +41,14 @@ export class RedisPresenceService implements OnModuleDestroy {
     this.publisher.on('error', (err) =>
       this.logger.error('Redis publisher error', err.message),
     );
-    this.subscriber.on('error', (err) =>
-      this.logger.error('Redis subscriber error', err.message),
-    );
   }
 
   async onModuleDestroy() {
     await this.client?.quit();
     await this.publisher?.quit();
-    await this.subscriber?.quit();
+    this.subscriber?.disconnect();
+    this.subscriber = null;
+    this.isSubscribed = false;
   }
 
   getInternalClient(): Redis {
@@ -171,17 +169,29 @@ export class RedisPresenceService implements OnModuleDestroy {
   async subscribeToStatusChanges(
     callback: (event: PresenceStatusEvent) => void,
   ): Promise<void> {
-    await this.subscriber.subscribe(PRESENCE_CHANNEL);
-    this.subscriber.on('message', (channel: string, message: string) => {
-      if (channel === PRESENCE_CHANNEL) {
-        try {
-          const event: PresenceStatusEvent = JSON.parse(message);
-          callback(event);
-        } catch (err) {
-          this.logger.error('Failed to parse presence event', err);
+    if (!this.subscriber) {
+      this.subscriber = this.client.duplicate();
+      this.subscriber.on('error', (err) =>
+        this.logger.error('Redis subscriber error', err.message),
+      );
+      this.subscriber.on('message', (channel: string, message: string) => {
+        if (channel === PRESENCE_CHANNEL) {
+          try {
+            const event: PresenceStatusEvent = JSON.parse(message);
+            callback(event);
+          } catch (err) {
+            this.logger.error('Failed to parse presence event', err);
+          }
         }
-      }
-    });
+      });
+    }
+
+    if (this.isSubscribed) {
+      return;
+    }
+
+    await this.subscriber.subscribe(PRESENCE_CHANNEL);
+    this.isSubscribed = true;
     this.logger.log('Subscribed to presence status changes');
   }
 }
