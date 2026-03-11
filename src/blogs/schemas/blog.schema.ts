@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
-import { generateShortSlug } from '../../common/utils/generate-short-slug';
+import { generatePrefixedShortSlug } from '../../common/utils/prefixed-slug';
 
 export type BlogDocument = Blog & Document;
 
@@ -16,7 +16,7 @@ export class Blog {
     required: true,
     trim: true,
     unique: true,
-    default: () => generateShortSlug(8),
+    default: () => generatePrefixedShortSlug(':', 8),
   })
   slug: string;
 

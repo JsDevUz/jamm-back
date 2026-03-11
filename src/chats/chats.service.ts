@@ -32,6 +32,10 @@ import {
   getTierLimit,
 } from '../common/limits/app-limits';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import {
+  generatePrefixedShortSlug,
+  isPrefixedShortSlug,
+} from '../common/utils/prefixed-slug';
 
 @Injectable()
 export class ChatsService implements OnModuleInit {
@@ -81,21 +85,33 @@ export class ChatsService implements OnModuleInit {
   }
 
   private async backfillPrivateUrls() {
-    const groupsWithoutUrl = await this.chatModel
-      .find({ isGroup: true, privateurl: { $exists: false } })
+    const groups = await this.chatModel
+      .find({ isGroup: true })
+      .select('_id privateurl')
       .exec();
-    if (groupsWithoutUrl.length > 0) {
+    const groupsNeedingPrivateUrl = groups.filter(
+      (group) => !isPrefixedShortSlug(group.privateurl, '-', 16),
+    );
+    if (groupsNeedingPrivateUrl.length > 0) {
       console.log(
-        `Backfilling privateurl for ${groupsWithoutUrl.length} groups...`,
+        `Backfilling privateurl for ${groupsNeedingPrivateUrl.length} groups...`,
       );
-      for (const group of groupsWithoutUrl) {
-        group.privateurl =
-          Math.random().toString(36).substring(2, 10) +
-          Math.random().toString(36).substring(2, 10);
+      for (const group of groupsNeedingPrivateUrl) {
+        group.privateurl = await this.generateUniqueGroupPrivateUrl();
         await group.save();
       }
       console.log('Finished backfilling privateurls.');
     }
+  }
+
+  private async generateUniqueGroupPrivateUrl() {
+    let privateurl = generatePrefixedShortSlug('-', 16);
+
+    while (await this.chatModel.exists({ privateurl })) {
+      privateurl = generatePrefixedShortSlug('-', 16);
+    }
+
+    return privateurl;
   }
 
   private async generateJammId(): Promise<number> {
@@ -361,7 +377,7 @@ export class ChatsService implements OnModuleInit {
     return groups.map((group) => {
       return {
         id: group._id.toString(),
-        urlSlug: group.jammId ? String(group.jammId) : group._id.toString(),
+        urlSlug: group.privateurl || (group.jammId ? String(group.jammId) : group._id.toString()),
         name: group.name || 'Group',
         avatar: group.avatar || '',
         membersCount: Array.isArray(group.members) ? group.members.length : 0,
@@ -438,8 +454,7 @@ export class ChatsService implements OnModuleInit {
       createdBy: dto.isGroup ? new Types.ObjectId(userId) : undefined,
       jammId: await this.generateJammId(),
       privateurl: dto.isGroup
-        ? Math.random().toString(36).substring(2, 10) +
-          Math.random().toString(36).substring(2, 10)
+        ? await this.generateUniqueGroupPrivateUrl()
         : undefined,
       members,
     });

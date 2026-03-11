@@ -35,6 +35,11 @@ import {
   generateShortSlug,
   sanitizeCustomSlug,
 } from '../common/utils/generate-short-slug';
+import {
+  generatePrefixedShortSlug,
+  isPrefixedShortSlug,
+  sanitizePrefixedSlug,
+} from '../common/utils/prefixed-slug';
 
 @Injectable()
 export class CoursesService implements OnModuleInit {
@@ -101,20 +106,20 @@ export class CoursesService implements OnModuleInit {
   }
 
   private isShortSlug(value?: string | null) {
-    return /^[a-z0-9]{8}$/.test(String(value || '').trim());
+    return isPrefixedShortSlug(value, '+');
   }
 
   private async generateUniqueCourseSlug(preferredSlug?: string) {
-    const baseSlug = sanitizeCustomSlug(preferredSlug);
+    const baseSlug = sanitizePrefixedSlug(preferredSlug, '+');
 
     if (baseSlug) {
       const existingCourse = await this.courseModel.exists({ urlSlug: baseSlug });
       if (!existingCourse) return baseSlug;
     }
 
-    let slug = generateShortSlug(8);
+    let slug = generatePrefixedShortSlug('+', 8);
     while (await this.courseModel.exists({ urlSlug: slug })) {
-      slug = generateShortSlug(8);
+      slug = generatePrefixedShortSlug('+', 8);
     }
 
     return slug;

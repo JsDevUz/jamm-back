@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 import { generateShortSlug } from '../../common/utils/generate-short-slug';
+import { generatePrefixedShortSlug } from '../../common/utils/prefixed-slug';
 
 /* ---- Embedded sub-schemas ---- */
 
@@ -460,7 +461,7 @@ export class Course {
   @Prop({
     required: true,
     unique: true,
-    default: () => generateShortSlug(8),
+    default: () => generatePrefixedShortSlug('+', 8),
   })
   urlSlug: string;
 

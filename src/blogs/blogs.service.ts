@@ -24,9 +24,10 @@ import {
   getTierLimit,
 } from '../common/limits/app-limits';
 import {
-  generateShortSlug,
-  sanitizeCustomSlug,
-} from '../common/utils/generate-short-slug';
+  generatePrefixedShortSlug,
+  isPrefixedShortSlug,
+  sanitizePrefixedSlug,
+} from '../common/utils/prefixed-slug';
 
 type BlogPayload = {
   title: string;
@@ -175,14 +176,14 @@ export class BlogsService implements OnModuleInit {
   }
 
   private isShortSlug(value?: string | null) {
-    return /^[a-z0-9]{8}$/.test(String(value || '').trim());
+    return isPrefixedShortSlug(value, ':');
   }
 
   private async generateUniqueBlogSlug(
     preferredSlug?: string,
     excludeBlogId?: string,
   ) {
-    const normalizedPreferred = sanitizeCustomSlug(preferredSlug);
+    const normalizedPreferred = sanitizePrefixedSlug(preferredSlug, ':');
 
     if (normalizedPreferred && this.isShortSlug(normalizedPreferred)) {
       const existingPreferred = await this.blogModel
@@ -202,7 +203,7 @@ export class BlogsService implements OnModuleInit {
     }
 
     while (true) {
-      const slug = generateShortSlug(8);
+      const slug = generatePrefixedShortSlug(':', 8);
       const existing = await this.blogModel
         .findOne({
           slug,
@@ -227,7 +228,7 @@ export class BlogsService implements OnModuleInit {
 
     for (const blog of blogs) {
       const currentSlug = String(blog.slug || '').trim().toLowerCase();
-      const normalizedSlug = sanitizeCustomSlug(currentSlug);
+      const normalizedSlug = sanitizePrefixedSlug(currentSlug, ':');
       const slugIsReusable =
         this.isShortSlug(normalizedSlug) && !seenSlugs.has(normalizedSlug);
 
