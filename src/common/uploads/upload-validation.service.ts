@@ -105,11 +105,12 @@ export class UploadValidationService {
   }
 
   private hasSignature(file: UploadFile, signatures: Array<Buffer | string>) {
-    return signatures.some((signature) =>
-      file.buffer.subarray(0, Buffer.byteLength(signature)).equals(
-        Buffer.isBuffer(signature) ? signature : Buffer.from(signature, 'hex'),
-      ),
-    );
+    return signatures.some((signature) => {
+      const expected = Buffer.isBuffer(signature)
+        ? signature
+        : Buffer.from(signature, 'hex');
+      return file.buffer.subarray(0, expected.length).equals(expected);
+    });
   }
 
   private assertImageSignature(file: UploadFile, label: string) {
