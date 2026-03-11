@@ -1,4 +1,4 @@
-FROM node:20-alpine AS deps
+FROM node:20-bookworm-slim AS deps
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ FROM deps AS build
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM node:20-alpine AS runner
+FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
