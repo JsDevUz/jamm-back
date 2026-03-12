@@ -5,6 +5,7 @@ import {
   NotFoundException,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -23,8 +24,10 @@ export class AuthService {
   ) {}
 
   async signup(signupDto: SignupDto) {
+    const normalizedEmail = signupDto.email.trim().toLowerCase();
+
     // Check if email already exists
-    const existingEmail = await this.usersService.findByEmail(signupDto.email);
+    const existingEmail = await this.usersService.findByEmail(normalizedEmail);
     if (existingEmail) {
       throw new ConflictException("Bu email allaqachon ro'yxatdan o'tgan");
     }
@@ -47,16 +50,28 @@ export class AuthService {
     // Create user (unverified)
     const user = await this.usersService.create({
       ...signupDto,
+      email: normalizedEmail,
       password: hashedPassword,
       isVerified: false,
       verificationToken,
     });
 
-    // Send verification email
-    await this.emailService.sendVerificationEmail(
-      user.email,
-      verificationToken,
-    );
+    try {
+      await this.emailService.sendVerificationEmail(
+        user.email,
+        verificationToken,
+      );
+    } catch (error) {
+      await this.usersService.deleteById(user._id.toString());
+
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new ServiceUnavailableException(
+        "Tasdiqlash emailini yuborib bo'lmadi. Qaytadan urinib ko'ring.",
+      );
+    }
 
     return {
       message:
@@ -65,8 +80,10 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto) {
+    const normalizedEmail = loginDto.email.trim().toLowerCase();
+
     // Find user by email
-    const user = await this.usersService.findByEmail(loginDto.email);
+    const user = await this.usersService.findByEmail(normalizedEmail);
     if (!user) {
       throw new UnauthorizedException("Email yoki parol noto'g'ri");
     }

@@ -4,10 +4,14 @@ import {
   IsString,
   MinLength,
   IsOptional,
+  Matches,
 } from 'class-validator';
 
 export class SignupDto {
   @IsEmail({}, { message: "Email formati noto'g'ri" })
+  @Matches(/^[^\s@]+@gmail\.com$/i, {
+    message: "Faqat gmail.com email manzili ruxsat etiladi",
+  })
   email: string;
 
   @IsString()

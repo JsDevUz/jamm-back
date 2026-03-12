@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { parseAllowedOrigins } from '../config/cors.config';
@@ -66,15 +66,17 @@ export class EmailService {
       try {
         await this.transporter.sendMail(mailOptions);
         console.log(`Verification email sent to: ${email}`);
+        return;
       } catch (error) {
         console.error('Error sending verification email:', error);
+        throw new ServiceUnavailableException(
+          "Tasdiqlash emailini yuborib bo'lmadi. Keyinroq qayta urinib ko'ring.",
+        );
       }
-    } else {
-      console.log('\n==========================================');
-      console.log('MOCK EMAIL VERIFICATION');
-      console.log(`TO: ${email}`);
-      console.log(`LINK: ${verificationUrl}`);
-      console.log('==========================================\n');
     }
+
+    throw new ServiceUnavailableException(
+      "Email xizmati sozlanmagan. Tasdiqlash emailini yuborib bo'lmadi.",
+    );
   }
 }

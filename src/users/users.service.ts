@@ -284,6 +284,10 @@ export class UsersService {
     return this.userModel.findOne({ verificationToken: token }).exec();
   }
 
+  async deleteById(id: string): Promise<void> {
+    await this.userModel.findByIdAndDelete(id).exec();
+  }
+
   async searchUsers(
     query: string,
     currentUserId: string,
