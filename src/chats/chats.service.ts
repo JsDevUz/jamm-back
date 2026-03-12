@@ -155,6 +155,16 @@ export class ChatsService implements OnModuleInit {
   private decryptMessage(message: any, strategy: EncryptionStrategy): any {
     const nextMessage = { ...message };
 
+    if (nextMessage.isDeleted) {
+      return {
+        ...nextMessage,
+        content: "Bu xabar o'chirildi",
+        isEncrypted: false,
+        iv: '',
+        authTag: '',
+      };
+    }
+
     if (nextMessage.replayTo?.isEncrypted) {
       nextMessage.replayTo = this.decryptMessage(nextMessage.replayTo, strategy);
     }
@@ -173,6 +183,56 @@ export class ChatsService implements OnModuleInit {
       console.error(`Failed to decrypt message ${nextMessage._id}:`, error);
       return { ...nextMessage, content: '[Decryption Error]' };
     }
+  }
+
+  private async updateChatLastMessagePreview(chatId: string | Types.ObjectId) {
+    const normalizedChatId =
+      typeof chatId === 'string' ? new Types.ObjectId(chatId) : chatId;
+
+    const latestVisibleMessage = await this.messageModel
+      .findOne({
+        chatId: normalizedChatId,
+        isDeleted: false,
+      })
+      .sort({ createdAt: -1 })
+      .select(
+        'content iv authTag encryptionType keyVersion isEncrypted createdAt',
+      )
+      .lean()
+      .exec();
+
+    if (!latestVisibleMessage) {
+      return this.chatModel
+        .findByIdAndUpdate(
+          normalizedChatId,
+          {
+            lastMessage: '',
+            lastMessageIv: '',
+            lastMessageAuthTag: '',
+            lastMessageEncryptionType: 'none',
+            lastMessageKeyVersion: 0,
+            lastMessageAt: null,
+          },
+          { new: true },
+        )
+        .exec();
+    }
+
+    return this.chatModel
+      .findByIdAndUpdate(
+        normalizedChatId,
+        {
+          lastMessage: latestVisibleMessage.content,
+          lastMessageIv: latestVisibleMessage.iv || '',
+          lastMessageAuthTag: latestVisibleMessage.authTag || '',
+          lastMessageEncryptionType:
+            latestVisibleMessage.encryptionType || 'none',
+          lastMessageKeyVersion: latestVisibleMessage.keyVersion || 0,
+          lastMessageAt: (latestVisibleMessage as any).createdAt,
+        },
+        { new: true },
+      )
+      .exec();
   }
 
   private decryptLastMessagePreview(chat: any): string {
@@ -824,9 +884,10 @@ export class ChatsService implements OnModuleInit {
         cursorDate
           ? {
               chatId: chatObjectId,
+              isDeleted: false,
               createdAt: { $lt: cursorDate },
             }
-          : { chatId: chatObjectId },
+          : { chatId: chatObjectId, isDeleted: false },
       )
       .sort({ createdAt: -1 })
       .select('_id createdAt')
@@ -849,6 +910,7 @@ export class ChatsService implements OnModuleInit {
       this.messageModel
         .find({
           chatId: chatObjectId,
+          isDeleted: false,
           createdAt: {
             $gte: dayStart,
             $lt: dayEnd,
@@ -870,6 +932,7 @@ export class ChatsService implements OnModuleInit {
         .exec(),
       this.messageModel.exists({
         chatId: chatObjectId,
+        isDeleted: false,
         createdAt: { $lt: dayStart },
       }),
     ]);
@@ -1070,6 +1133,12 @@ export class ChatsService implements OnModuleInit {
 
     message.isDeleted = true;
     message.content = "Bu xabar o'chirildi";
+    message.isEncrypted = false;
+    message.iv = '';
+    message.authTag = '';
+    message.encryptionType = 'none';
+    message.keyVersion = 0;
+    message.searchableText = '';
     await message.save();
 
     const populatedMessage = await message.populate([
@@ -1084,7 +1153,10 @@ export class ChatsService implements OnModuleInit {
       },
     ]);
 
-    const chat = await this.chatModel.findById(message.chatId);
+    const [chat, updatedChat] = await Promise.all([
+      this.chatModel.findById(message.chatId),
+      this.updateChatLastMessagePreview(message.chatId),
+    ]);
     const rooms = [`chat_${message.chatId}`];
     if (chat && chat.members) {
       chat.members.forEach((m: any) =>
@@ -1092,9 +1164,16 @@ export class ChatsService implements OnModuleInit {
       );
     }
 
-    this.chatsGateway.server
-      .to(rooms)
-      .emit('message_deleted', populatedMessage);
+    this.chatsGateway.server.to(rooms).emit('message_deleted', populatedMessage);
+
+    if (updatedChat) {
+      this.chatsGateway.server.to(rooms).emit('chat_updated', {
+        chatId: updatedChat._id.toString(),
+        lastMessage: this.decryptLastMessagePreview(updatedChat),
+        lastMessageAt: updatedChat.lastMessageAt || null,
+        updatedAt: (updatedChat as any).updatedAt,
+      });
+    }
 
     return populatedMessage;
   }
