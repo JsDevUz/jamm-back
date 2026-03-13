@@ -36,6 +36,7 @@ async function bootstrap() {
       'Content-Type',
       'Accept',
       'Authorization',
+      'X-App-Unlock-Token',
       'Range',
     ],
     exposedHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range'],

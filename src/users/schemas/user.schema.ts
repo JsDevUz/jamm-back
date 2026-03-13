@@ -86,6 +86,12 @@ export class User {
   @Prop({ type: Object, default: {} })
   onboardingData: Record<string, any>;
 
+  @Prop({ type: String, default: null, select: false })
+  appLockPinHash: string | null;
+
+  @Prop({ default: false })
+  appLockEnabled: boolean;
+
   @Prop({ default: false })
   isBlocked: boolean;
 }

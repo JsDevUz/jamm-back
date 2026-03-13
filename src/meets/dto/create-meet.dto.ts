@@ -1,8 +1,11 @@
-import { IsBoolean, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { APP_TEXT_LIMITS } from '../../common/limits/app-limits';
 
 export class CreateMeetDto {
   @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  @Matches(/^[a-zA-Z0-9-]+$/)
   roomId: string;
 
   @IsString()

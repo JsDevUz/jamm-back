@@ -159,6 +159,7 @@ export class AuthService {
     const { password, __v, ...sanitized } = user.toObject();
     return {
       ...sanitized,
+      appLockEnabled: Boolean(sanitized.appLockEnabled),
       selectedProfileDecorationId:
         sanitized.selectedProfileDecorationId || null,
       customProfileDecorationImage: sanitized.customProfileDecorationImage || null,

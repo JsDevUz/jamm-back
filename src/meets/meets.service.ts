@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -28,6 +29,11 @@ export class MeetsService {
     creator: string;
   }): Promise<Meet> {
     assertMaxChars('Meet nomi', data.title, APP_TEXT_LIMITS.meetTitleChars);
+
+    const existingMeet = await this.meetModel.exists({ roomId: data.roomId });
+    if (existingMeet) {
+      throw new ConflictException('Bu room ID allaqachon band');
+    }
 
     const user = await this.userModel
       .findById(data.creator)

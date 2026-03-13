@@ -10,6 +10,7 @@ import {
   NotFoundException,
   BadRequestException,
   Post,
+  Res,
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
@@ -21,9 +22,19 @@ import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AppSettingsService } from '../app-settings/app-settings.service';
 import { UpdateProfileDecorationDto } from './dto/profile-decoration.dto';
+import { SetAppLockDto } from './dto/set-app-lock.dto';
 import { UploadValidationService } from '../common/uploads/upload-validation.service';
 import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
 import { APP_LIMITS } from '../common/limits/app-limits';
+import { VerifyAppLockDto } from './dto/verify-app-lock.dto';
+import type { Response } from 'express';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import {
+  APP_UNLOCK_COOKIE_NAME,
+  buildAppUnlockCookieOptions,
+  getJwtSecret,
+} from '../auth/auth-cookie.util';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -32,7 +43,19 @@ export class UsersController {
     private readonly usersService: UsersService,
     private readonly appSettingsService: AppSettingsService,
     private readonly uploadValidationService: UploadValidationService,
+    private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
   ) {}
+
+  private signAppUnlockToken(userId: string) {
+    return this.jwtService.sign(
+      { sub: userId, type: 'app-unlock' },
+      {
+        secret: getJwtSecret(this.configService),
+        expiresIn: '7d',
+      },
+    );
+  }
 
   private async sanitizeUser(user: any) {
     if (!user) return null;
@@ -54,6 +77,7 @@ export class UsersController {
       level: obj.level,
       premiumStatus: obj.premiumStatus,
       premiumExpiresAt: obj.premiumExpiresAt,
+      appLockEnabled: Boolean(obj.appLockEnabled),
       isOnboardingCompleted: obj.isOnboardingCompleted,
       isVerified: obj.isVerified,
       createdAt: obj.createdAt,
@@ -87,6 +111,74 @@ export class UsersController {
   async getMe(@Request() req) {
     const user = await this.usersService.findById(req.user._id.toString());
     return this.sanitizeUser(user);
+  }
+
+  @Get('me/app-lock')
+  async getAppLockStatus(@Request() req) {
+    return this.usersService.getAppLockStatus(req.user._id.toString());
+  }
+
+  @Post('me/app-lock')
+  async setAppLock(@Request() req, @Body() body: SetAppLockDto) {
+    return this.usersService.setAppLockPin(
+      req.user._id.toString(),
+      body.pin,
+      body.currentPin,
+    );
+  }
+
+  @Post('me/app-lock/verify')
+  async verifyAppLock(
+    @Request() req,
+    @Body() body: VerifyAppLockDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.usersService.verifyAppLockPin(
+      req.user._id.toString(),
+      body.pin,
+    );
+
+    if (result?.valid) {
+      const unlockToken = this.signAppUnlockToken(req.user._id.toString());
+      res.cookie(
+        APP_UNLOCK_COOKIE_NAME,
+        unlockToken,
+        buildAppUnlockCookieOptions(this.configService),
+      );
+      return { ...result, unlockToken };
+    }
+
+    res.clearCookie(
+      APP_UNLOCK_COOKIE_NAME,
+      buildAppUnlockCookieOptions(this.configService),
+    );
+    return result;
+  }
+
+  @Post('me/app-lock/remove')
+  async removeAppLock(@Request() req, @Body() body: VerifyAppLockDto) {
+    return this.usersService.removeAppLockPin(req.user._id.toString(), body.pin);
+  }
+
+  @Post('me/app-lock/logout-clear')
+  async clearAppLockOnLogout(
+    @Request() req,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.clearCookie(
+      APP_UNLOCK_COOKIE_NAME,
+      buildAppUnlockCookieOptions(this.configService),
+    );
+    return this.usersService.clearAppLockOnLogout(req.user._id.toString());
+  }
+
+  @Post('me/app-lock/lock-session')
+  async lockAppSession(@Res({ passthrough: true }) res: Response) {
+    res.clearCookie(
+      APP_UNLOCK_COOKIE_NAME,
+      buildAppUnlockCookieOptions(this.configService),
+    );
+    return { locked: true };
   }
 
   /** Update the current user's profile */

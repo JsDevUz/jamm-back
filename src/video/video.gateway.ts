@@ -52,6 +52,60 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly premiumService: PremiumService,
   ) {}
 
+  private sanitizeDisplayName(rawValue: unknown): string {
+    const value =
+      typeof rawValue === 'string'
+        ? rawValue
+            .replace(/[\u0000-\u001F\u007F]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+        : '';
+
+    return value.slice(0, 60) || 'Guest';
+  }
+
+  private sanitizeRoomTitle(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') return '';
+
+    return rawValue
+      .replace(/[\u0000-\u001F\u007F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, APP_TEXT_LIMITS.meetTitleChars);
+  }
+
+  private isSocketInRoom(room: RoomInfo | undefined, socketId: string): boolean {
+    return Boolean(room?.peers.has(socketId));
+  }
+
+  private findSharedRoomForPeers(
+    sourceSocketId: string,
+    targetSocketId: string,
+  ): {
+    roomId: string;
+    room: RoomInfo;
+  } | null {
+    for (const [roomId, room] of this.rooms.entries()) {
+      if (room.peers.has(sourceSocketId) && room.peers.has(targetSocketId)) {
+        return { roomId, room };
+      }
+    }
+
+    return null;
+  }
+
+  private canCreatorControlPeer(
+    room: RoomInfo | undefined,
+    creatorSocketId: string,
+    targetPeerId: string,
+  ): boolean {
+    return Boolean(
+      room &&
+        room.creatorSocketId === creatorSocketId &&
+        room.peers.has(targetPeerId),
+    );
+  }
+
   async handleConnection(client: Socket) {
     try {
       const payload = await verifySocketToken(
@@ -66,6 +120,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         };
       }
     } catch (err) {
+      client.data.user = null;
       console.log(`[Video] auth error for ${client.id}:`, err.message);
     }
     console.log(`[Video] connected: ${client.id}`);
@@ -107,12 +162,32 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     },
   ) {
     this.rateLimiter.take(`video:create-room:${client.id}`, 5, 60_000);
-    const { roomId, displayName, isPrivate = false, title = '' } = data;
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const displayName = this.sanitizeDisplayName(data?.displayName);
+    const isPrivate = Boolean(data?.isPrivate);
+    const title = this.sanitizeRoomTitle(data?.title);
 
     const userId = client.data?.user?._id;
     if (!userId) {
       client.emit('error', {
         message: 'Authentication required to create a room',
+      });
+      return;
+    }
+
+    if (
+      !roomId ||
+      roomId.length < 8 ||
+      roomId.length > 128 ||
+      !/^[a-zA-Z0-9-]+$/.test(roomId)
+    ) {
+      client.emit('error', { message: 'Room ID noto‘g‘ri' });
+      return;
+    }
+
+    if (this.rooms.has(roomId)) {
+      client.emit('error', {
+        message: 'Bu room allaqachon mavjud. Yangisini yarating.',
       });
       return;
     }
@@ -174,11 +249,20 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string; displayName: string },
   ) {
     this.rateLimiter.take(`video:join-room:${client.id}`, 15, 60_000);
-    const { roomId, displayName } = data;
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const displayName = this.sanitizeDisplayName(data?.displayName);
     const room = this.rooms.get(roomId);
 
     if (!room) {
       client.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    if (room.peers.has(client.id)) {
+      client.emit('room-info', {
+        title: room.title,
+        isPrivate: room.isPrivate,
+      });
       return;
     }
 
@@ -190,6 +274,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     if (room.isPrivate) {
+      if (room.knockQueue.has(client.id)) {
+        client.emit('waiting-for-approval');
+        client.emit('room-info', {
+          title: room.title,
+          isPrivate: room.isPrivate,
+        });
+        return;
+      }
+
       room.knockQueue.set(client.id, { displayName, socket: client });
       this.server.to(room.creatorSocketId).emit('knock-request', {
         peerId: client.id,
@@ -292,6 +385,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
     this.rateLimiter.take(`video:offer:${client.id}`, 600, 60_000);
+    const sharedRoom = this.findSharedRoomForPeers(client.id, data.targetId);
+    if (!sharedRoom) {
+      client.emit('error', { message: 'Signal yuborish uchun room ruxsati yo‘q' });
+      return;
+    }
     this.server
       .to(data.targetId)
       .emit('offer', { senderId: client.id, sdp: data.sdp });
@@ -303,6 +401,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
     this.rateLimiter.take(`video:answer:${client.id}`, 600, 60_000);
+    const sharedRoom = this.findSharedRoomForPeers(client.id, data.targetId);
+    if (!sharedRoom) {
+      client.emit('error', { message: 'Signal yuborish uchun room ruxsati yo‘q' });
+      return;
+    }
     this.server
       .to(data.targetId)
       .emit('answer', { senderId: client.id, sdp: data.sdp });
@@ -314,6 +417,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { targetId: string; candidate: any },
   ) {
     this.rateLimiter.take(`video:ice:${client.id}`, 4000, 60_000);
+    const sharedRoom = this.findSharedRoomForPeers(client.id, data.targetId);
+    if (!sharedRoom) {
+      client.emit('error', { message: 'ICE yuborish uchun room ruxsati yo‘q' });
+      return;
+    }
     this.server.to(data.targetId).emit('ice-candidate', {
       senderId: client.id,
       candidate: data.candidate,
@@ -328,10 +436,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.rateLimiter.take(`video:leave-room:${client.id}`, 30, 60_000);
     const { roomId } = data;
     const room = this.rooms.get(roomId);
-    if (room) {
+    if (room?.peers.has(client.id) || room?.knockQueue.has(client.id)) {
       room.peers.delete(client.id);
       room.knockQueue.delete(client.id);
       if (room.peers.size === 0) this.rooms.delete(roomId);
+    } else {
+      return;
     }
     client.to(roomId).emit('peer-left', { peerId: client.id });
     client.leave(roomId);
@@ -345,6 +455,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string },
   ) {
     this.rateLimiter.take(`video:screen:${client.id}`, 120, 60_000);
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
   }
 
@@ -354,6 +466,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string },
   ) {
     this.rateLimiter.take(`video:screen:${client.id}`, 120, 60_000);
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
   }
 
@@ -365,6 +479,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string },
   ) {
     this.rateLimiter.take(`video:recording:${client.id}`, 60, 60_000);
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('recording-started', { peerId: client.id });
   }
 
@@ -374,6 +490,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string },
   ) {
     this.rateLimiter.take(`video:recording:${client.id}`, 60, 60_000);
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('recording-stopped', { peerId: client.id });
   }
 
@@ -386,7 +504,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
-    if (!room || room.creatorSocketId !== client.id) return;
+    if (!this.canCreatorControlPeer(room, client.id, data.peerId)) return;
     this.server.to(data.peerId).emit('force-mute-mic');
   }
 
@@ -397,7 +515,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
-    if (!room || room.creatorSocketId !== client.id) return;
+    if (!this.canCreatorControlPeer(room, client.id, data.peerId)) return;
     this.server.to(data.peerId).emit('force-mute-cam');
   }
 
@@ -408,7 +526,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
-    if (!room || room.creatorSocketId !== client.id) return;
+    if (!this.canCreatorControlPeer(room, client.id, data.peerId)) return;
     this.server.to(data.peerId).emit('allow-mic');
   }
 
@@ -419,7 +537,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.rateLimiter.take(`video:creator-controls:${client.id}`, 120, 60_000);
     const room = this.rooms.get(data.roomId);
-    if (!room || room.creatorSocketId !== client.id) return;
+    if (!this.canCreatorControlPeer(room, client.id, data.peerId)) return;
     this.server.to(data.peerId).emit('allow-cam');
   }
 
@@ -430,6 +548,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('hand-raised', { peerId: client.id });
   }
 
@@ -438,6 +558,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { roomId: string },
   ) {
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('hand-lowered', { peerId: client.id });
   }
 
@@ -449,7 +571,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { roomId: string; peerId: string },
   ) {
     const room = this.rooms.get(data.roomId);
-    if (!room || room.creatorSocketId !== client.id) return;
+    if (
+      !room ||
+      room.creatorSocketId !== client.id ||
+      !room.peers.has(data.peerId)
+    )
+      return;
     // Notify the kicked peer
     this.server.to(data.peerId).emit('kicked');
     // Notify others

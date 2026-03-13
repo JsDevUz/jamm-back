@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { JwtModule } from '@nestjs/jwt';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { User, UserSchema } from './schemas/user.schema';
@@ -17,6 +18,7 @@ import { AppSettingsModule } from '../app-settings/app-settings.module';
       { name: User.name, schema: UserSchema },
       { name: ProfileDecoration.name, schema: ProfileDecorationSchema },
     ]),
+    JwtModule,
     forwardRef(() => ChatsModule),
     AppSettingsModule,
   ],

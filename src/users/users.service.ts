@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { User, UserDocument } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ChatsService } from '../chats/chats.service';
@@ -25,6 +26,7 @@ import { AppSettingsService } from '../app-settings/app-settings.service';
 
 @Injectable()
 export class UsersService {
+  private readonly appLockKeyLength = 64;
   private readonly defaultProfileDecorations = [
     {
       key: 'sparkle-gold',
@@ -274,6 +276,139 @@ export class UsersService {
 
   async findById(id: string): Promise<UserDocument | null> {
     return this.userModel.findById(id).exec();
+  }
+
+  private hashAppLockPin(pin: string, salt = randomBytes(16).toString('hex')) {
+    const derivedKey = scryptSync(pin, salt, this.appLockKeyLength).toString(
+      'hex',
+    );
+    return `${salt}:${derivedKey}`;
+  }
+
+  private verifyAppLockPinHash(pin: string, storedHash: string) {
+    const [salt, expectedHash] = String(storedHash || '').split(':');
+    if (!salt || !expectedHash) {
+      return false;
+    }
+
+    const actualHash = scryptSync(pin, salt, this.appLockKeyLength);
+    const expectedHashBuffer = Buffer.from(expectedHash, 'hex');
+
+    if (actualHash.length !== expectedHashBuffer.length) {
+      return false;
+    }
+
+    return timingSafeEqual(actualHash, expectedHashBuffer);
+  }
+
+  async getAppLockStatus(userId: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('appLockEnabled')
+      .lean()
+      .exec();
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    return { enabled: Boolean(user.appLockEnabled) };
+  }
+
+  async setAppLockPin(
+    userId: string,
+    pin: string,
+    currentPin?: string,
+  ): Promise<{ enabled: boolean }> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+appLockPinHash appLockEnabled')
+      .exec();
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    if (user.appLockEnabled) {
+      if (!currentPin) {
+        throw new BadRequestException('Joriy app parolini kiriting');
+      }
+
+      if (
+        !user.appLockPinHash ||
+        !this.verifyAppLockPinHash(currentPin, user.appLockPinHash)
+      ) {
+        throw new ForbiddenException("Joriy app paroli noto'g'ri");
+      }
+    }
+
+    user.appLockPinHash = this.hashAppLockPin(pin);
+    user.appLockEnabled = true;
+    await user.save();
+
+    return { enabled: true };
+  }
+
+  async verifyAppLockPin(userId: string, pin: string) {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+appLockPinHash appLockEnabled')
+      .lean()
+      .exec();
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    if (!user.appLockEnabled || !user.appLockPinHash) {
+      return { valid: false };
+    }
+
+    return {
+      valid: this.verifyAppLockPinHash(pin, user.appLockPinHash),
+    };
+  }
+
+  async removeAppLockPin(userId: string, pin: string): Promise<{ enabled: boolean }> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+appLockPinHash appLockEnabled')
+      .exec();
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    if (!user.appLockEnabled || !user.appLockPinHash) {
+      return { enabled: false };
+    }
+
+    if (!this.verifyAppLockPinHash(pin, user.appLockPinHash)) {
+      throw new ForbiddenException("App paroli noto'g'ri");
+    }
+
+    user.appLockPinHash = null;
+    user.appLockEnabled = false;
+    await user.save();
+
+    return { enabled: false };
+  }
+
+  async clearAppLockOnLogout(userId: string): Promise<{ enabled: boolean }> {
+    const user = await this.userModel
+      .findById(userId)
+      .select('+appLockPinHash appLockEnabled')
+      .exec();
+
+    if (!user) {
+      throw new BadRequestException('Foydalanuvchi topilmadi');
+    }
+
+    user.appLockPinHash = null;
+    user.appLockEnabled = false;
+    await user.save();
+
+    return { enabled: false };
   }
 
   async findByUsername(username: string): Promise<UserDocument | null> {
