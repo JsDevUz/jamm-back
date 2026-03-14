@@ -7,14 +7,22 @@ import { parseAllowedOrigins } from '../config/cors.config';
 export class EmailService {
   private transporter: nodemailer.Transporter;
   private frontendAppUrl: string;
+  private senderEmail: string;
+  private senderName: string;
 
   constructor(private configService: ConfigService) {
     // For now, since we don't have SMTP settings, we can use a mock approach or log to console
     // In production, you'd use configService.get('SMTP_HOST'), etc.
     const smtpHost = this.configService.get<string>('SMTP_HOST');
-    const smtpPort = this.configService.get<number>('SMTP_PORT');
+    const smtpPort = Number(this.configService.get<string>('SMTP_PORT') || 0);
     const smtpUser = this.configService.get<string>('SMTP_USER');
     const smtpPass = this.configService.get<string>('SMTP_PASS');
+    this.senderEmail =
+      this.configService.get<string>('SMTP_FROM_EMAIL') ||
+      this.configService.get<string>('SMTP_USER') ||
+      'no-reply@jamm.uz';
+    this.senderName =
+      this.configService.get<string>('SMTP_FROM_NAME') || 'Jamm';
 
     if (smtpHost && smtpUser && smtpPass) {
       this.transporter = nodemailer.createTransport({
@@ -43,7 +51,7 @@ export class EmailService {
   async sendVerificationEmail(email: string, token: string) {
     const verificationUrl = `${this.frontendAppUrl}/login?verify_token=${token}`;
     const mailOptions = {
-      from: '"Jamm" <no-reply@jamm.uz>',
+      from: `"${this.senderName}" <${this.senderEmail}>`,
       to: email,
       subject: 'Emailingizni tasdiqlang',
       html: `
