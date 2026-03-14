@@ -512,10 +512,33 @@ export class UsersService {
       }
     }
 
-    return this.userModel
+    const existingUser = await this.userModel
+      .findById(userId)
+      .select('avatar')
+      .exec();
+
+    const previousAvatar = existingUser?.avatar || '';
+    const nextAvatar =
+      data.avatar !== undefined ? String(data.avatar || '') : previousAvatar;
+
+    const updatedUser = await this.userModel
       .findByIdAndUpdate(userId, { $set: data }, { new: true })
       .select('-password')
       .exec();
+
+    if (
+      previousAvatar &&
+      previousAvatar !== nextAvatar &&
+      this.r2Service.isManagedFile(previousAvatar)
+    ) {
+      try {
+        await this.r2Service.deleteFile(previousAvatar);
+      } catch (error) {
+        console.error('Old avatar cleanup failed:', error);
+      }
+    }
+
+    return updatedUser;
   }
 
   async updateAvatar(
@@ -532,6 +555,16 @@ export class UsersService {
     }
   }
 
+  async uploadAvatarOnly(file: Express.Multer.File): Promise<string> {
+    try {
+      return await this.r2Service.uploadFile(file, 'avatars');
+    } catch (error) {
+      throw new InternalServerErrorException(
+        'Avatar yuklashda xatolik yuz berdi',
+      );
+    }
+  }
+
   async toggleFollow(
     currentUserId: string,
     targetUserId: string,
@@ -541,10 +574,21 @@ export class UsersService {
     }
 
     const currentId = new Types.ObjectId(currentUserId);
-    const targetId = new Types.ObjectId(targetUserId);
-
-    const target = await this.userModel.findById(targetId);
+    const isJammId = /^\d{5,7}$/.test(String(targetUserId || '').trim());
+    const target = await this.userModel
+      .findOne(
+        isJammId
+          ? { jammId: Number(targetUserId) }
+          : { _id: targetUserId },
+      )
+      .select('_id followers')
+      .exec();
     if (!target) throw new BadRequestException('Foydalanuvchi topilmadi');
+    if (target._id.equals(currentId)) {
+      throw new BadRequestException("O'zingizga obuna bo'lolmaysiz");
+    }
+
+    const targetId = target._id as Types.ObjectId;
 
     const isFollowing = (target.followers || []).some((id) =>
       id.equals(currentId),

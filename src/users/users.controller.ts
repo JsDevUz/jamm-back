@@ -106,6 +106,25 @@ export class UsersController {
     return this.sanitizeUser(user);
   }
 
+  @Post('upload-avatar')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.homeworkPhotoBytes),
+    ),
+  )
+  async uploadAvatarOnly(
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      label: 'Avatar',
+    });
+    return {
+      avatar: await this.usersService.uploadAvatarOnly(file),
+    };
+  }
+
   /** Get the current user's profile */
   @Get('me')
   async getMe(@Request() req) {

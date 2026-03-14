@@ -94,6 +94,59 @@ export class ArenaService {
     return mode === 'words' ? 'words' : 'digits';
   }
 
+  private async buildMnemonicCurrentUserBest(
+    mode: 'digits' | 'words',
+    userId: string,
+  ) {
+    const current = await this.mnemonicResultModel
+      .findOne({
+        userId: new Types.ObjectId(userId),
+        mode,
+      })
+      .populate(
+        'userId',
+        '_id username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
+
+    if (!current) return null;
+
+    const populatedUser = current.userId as any;
+    const betterCount = await this.mnemonicResultModel.countDocuments({
+      mode,
+      $or: [
+        { score: { $gt: current.score } },
+        {
+          score: current.score,
+          elapsedMemorizeMs: { $lt: current.elapsedMemorizeMs },
+        },
+      ],
+    });
+
+    return {
+      rank: betterCount + 1,
+      score: current.score,
+      total: current.total,
+      accuracy: current.accuracy,
+      elapsedMemorizeMs: current.elapsedMemorizeMs,
+      updatedAt: (current as any).updatedAt,
+      user: populatedUser
+        ? {
+            _id: populatedUser._id,
+            username: populatedUser.username,
+            nickname: populatedUser.nickname,
+            avatar: populatedUser.avatar,
+            premiumStatus: populatedUser.premiumStatus,
+            selectedProfileDecorationId:
+              populatedUser.selectedProfileDecorationId || null,
+            customProfileDecorationImage:
+              populatedUser.customProfileDecorationImage || null,
+          }
+        : null,
+    };
+  }
+
   private activeBattles: Map<string, BattleRoom> = new Map();
 
   private tokenizeSentence(value: string): string[] {
@@ -474,10 +527,12 @@ export class ArenaService {
         elapsedMemorizeMs < existing.elapsedMemorizeMs);
 
     if (!shouldReplace) {
+      const currentUserBest = await this.buildMnemonicCurrentUserBest(mode, userId);
       return {
         saved: false,
         replaced: false,
         best: existing,
+        currentUserBest,
       };
     }
 
@@ -498,10 +553,13 @@ export class ArenaService {
       },
     );
 
+    const currentUserBest = await this.buildMnemonicCurrentUserBest(mode, userId);
+
     return {
       saved: true,
       replaced: Boolean(existing),
       best,
+      currentUserBest,
     };
   }
 
@@ -561,53 +619,10 @@ export class ArenaService {
       | null = null;
 
     if (currentUserId) {
-      const current = await this.mnemonicResultModel
-        .findOne({
-          userId: new Types.ObjectId(currentUserId),
-          mode: normalizedMode,
-        })
-        .populate(
-          'userId',
-          '_id username nickname avatar premiumStatus selectedProfileDecorationId customProfileDecorationImage',
-        )
-        .lean()
-        .exec();
-
-      if (current) {
-        const populatedUser = current.userId as any;
-        const betterCount = await this.mnemonicResultModel.countDocuments({
-          mode: normalizedMode,
-          $or: [
-            { score: { $gt: current.score } },
-            {
-              score: current.score,
-              elapsedMemorizeMs: { $lt: current.elapsedMemorizeMs },
-            },
-          ],
-        });
-
-        currentUserBest = {
-          rank: betterCount + 1,
-          score: current.score,
-          total: current.total,
-          accuracy: current.accuracy,
-          elapsedMemorizeMs: current.elapsedMemorizeMs,
-          updatedAt: (current as any).updatedAt,
-          user: populatedUser
-            ? {
-                _id: populatedUser._id,
-                username: populatedUser.username,
-                nickname: populatedUser.nickname,
-                avatar: populatedUser.avatar,
-                premiumStatus: populatedUser.premiumStatus,
-                selectedProfileDecorationId:
-                  populatedUser.selectedProfileDecorationId || null,
-                customProfileDecorationImage:
-                  populatedUser.customProfileDecorationImage || null,
-              }
-            : null,
-        };
-      }
+      currentUserBest = await this.buildMnemonicCurrentUserBest(
+        normalizedMode,
+        currentUserId,
+      );
     }
 
     return {

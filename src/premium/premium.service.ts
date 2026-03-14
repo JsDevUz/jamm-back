@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Inject,
+  forwardRef,
   ForbiddenException,
   NotFoundException,
   BadRequestException,
@@ -20,11 +22,26 @@ import {
   SubscriptionDocument,
 } from './schemas/subscription.schema';
 import { RedisPresenceService } from '../presence/redis-presence.service';
+import { ChatsService } from '../chats/chats.service';
 
 @Injectable()
 export class PremiumService {
   private readonly logger = new Logger(PremiumService.name);
   private readonly PREMIUM_CACHE_PREFIX = 'premium_status:';
+  private readonly uzbekUtcMonths = [
+    'Yanvar',
+    'Fevral',
+    'Mart',
+    'Aprel',
+    'May',
+    'Iyun',
+    'Iyul',
+    'Avgust',
+    'Sentabr',
+    'Oktabr',
+    'Noyabr',
+    'Dekabr',
+  ];
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -36,7 +53,45 @@ export class PremiumService {
     private subscriptionModel: Model<SubscriptionDocument>,
     private configService: ConfigService,
     private redisPresence: RedisPresenceService,
+    @Inject(forwardRef(() => ChatsService))
+    private chatsService: ChatsService,
   ) {}
+
+  private formatUtcDateForMessage(value: Date) {
+    const date = new Date(value);
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const month = this.uzbekUtcMonths[date.getUTCMonth()] || 'Yanvar';
+    const year = date.getUTCFullYear();
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+    return `${day} ${month} ${year} ${hours}:${minutes}:${seconds} UTC`;
+  }
+
+  private async sendPremiumActivatedMessage(userId: string, expiresAt: Date) {
+    try {
+      const jammUser = await this.userModel
+        .findOne({ username: 'jamm' }, { _id: 1 })
+        .exec();
+
+      if (!jammUser) return;
+
+      const jammId = jammUser._id.toString();
+      const chat = await this.chatsService.createChat(jammId, {
+        isGroup: false,
+        memberIds: [userId],
+      });
+
+      const formattedExpiresAt = this.formatUtcDateForMessage(expiresAt);
+      await this.chatsService.sendMessage(
+        chat._id.toString(),
+        jammId,
+        `Jamm Premium sotib olganingiz uchun sizga raxmat. Premium obunangiz ${formattedExpiresAt} da yakuniga yetadi.`,
+      );
+    } catch (error) {
+      this.logger.error('Failed to send premium activation message', error);
+    }
+  }
 
   async onModuleInit() {
     await this.seedPlans();
@@ -195,6 +250,7 @@ export class PremiumService {
     ); // 1 hour cache
 
     this.logger.log(`User ${userId} redeemed promo code`);
+    await this.sendPremiumActivatedMessage(userId, expiresAt);
 
     return { success: true, expiresAt };
   }

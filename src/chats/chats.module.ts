@@ -32,7 +32,7 @@ import { getJwtSecret } from '../auth/auth-cookie.util';
     }),
     forwardRef(() => PresenceModule),
     EncryptionModule,
-    PremiumModule,
+    forwardRef(() => PremiumModule),
     AppSettingsModule,
   ],
   providers: [ChatsService, ChatsGateway, R2Service],

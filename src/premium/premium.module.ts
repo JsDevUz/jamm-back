@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PremiumService } from './premium.service';
 import { PremiumController } from './premium.controller';
@@ -11,6 +11,7 @@ import {
 } from './schemas/subscription.schema';
 import { PresenceModule } from '../presence/presence.module';
 import { PremiumCronService } from './premium-cron.service';
+import { ChatsModule } from '../chats/chats.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { PremiumCronService } from './premium-cron.service';
       { name: PremiumPlan.name, schema: PremiumPlanSchema },
       { name: Subscription.name, schema: SubscriptionSchema },
     ]),
+    forwardRef(() => ChatsModule),
     PresenceModule, // For Redis access if needed, or we can use RedisPresenceService
   ],
   providers: [PremiumService, PremiumCronService],

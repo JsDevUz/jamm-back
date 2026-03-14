@@ -578,6 +578,7 @@ export class ChatsService implements OnModuleInit {
     );
 
     let currentMemberIds = new Set<string>(oldMemberIds);
+    let removedMemberIds: string[] = [];
 
     /** ADMIN UPDATE */
     if (dto.admins !== undefined) {
@@ -611,6 +612,7 @@ export class ChatsService implements OnModuleInit {
       const removed = Array.from(currentMemberIds).filter(
         (id) => !newMemberIds.includes(id),
       );
+      removedMemberIds = removed;
 
       if (removed.length > 0) {
         const onlySelfRemoved = removed.length === 1 && removed[0] === userId;
@@ -668,9 +670,23 @@ export class ChatsService implements OnModuleInit {
       );
       chat.description = dto.description;
     }
+    const previousAvatar = chat.avatar || '';
     if (dto.avatar !== undefined) chat.avatar = dto.avatar;
 
     const updated = await chat.save();
+
+    if (
+      dto.avatar !== undefined &&
+      previousAvatar &&
+      previousAvatar !== updated.avatar &&
+      this.r2Service.isManagedFile(previousAvatar)
+    ) {
+      try {
+        await this.r2Service.deleteFile(previousAvatar);
+      } catch (error) {
+        console.error('Old group avatar cleanup failed:', error);
+      }
+    }
 
     /** SOCKET BROADCAST */
     const rooms = new Set<string>([`chat_${chatId}`]);
@@ -690,6 +706,12 @@ export class ChatsService implements OnModuleInit {
       members: updated.members,
       createdBy: updated.createdBy,
       admins: updated.admins,
+    });
+
+    removedMemberIds.forEach((memberId) => {
+      this.chatsGateway.server
+        .to(`user_${memberId}`)
+        .emit('chat_deleted', { chatId });
     });
 
     return updated;
