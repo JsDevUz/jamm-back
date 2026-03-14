@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -9,19 +10,49 @@ import {
   Query,
   UseGuards,
   Request,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { PostsService } from './posts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { PostContentDto, PostReplyDto } from './dto/post.dto';
+import { PostContentDto, PostReplyDto, UpsertPostDto } from './dto/post.dto';
+import { UploadValidationService } from '../common/uploads/upload-validation.service';
+import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
 @Controller('posts')
 export class PostsController {
-  constructor(private readonly postsService: PostsService) {}
+  constructor(
+    private readonly postsService: PostsService,
+    private readonly uploadValidationService: UploadValidationService,
+  ) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Post('upload-image')
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.postImageBytes),
+    ),
+  )
+  async uploadImage(@Request() req, @UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Rasm topilmadi');
+    }
+
+    await this.uploadValidationService.validateImageUpload(file, {
+      maxBytes: APP_LIMITS.postImageBytes,
+      label: 'Gurung rasmi',
+    });
+
+    return this.postsService.uploadImage(req.user._id.toString(), file);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Post()
-  createPost(@Request() req, @Body() body: PostContentDto) {
-    return this.postsService.createPost(req.user._id.toString(), body.content);
+  createPost(@Request() req, @Body() body: UpsertPostDto) {
+    return this.postsService.createPost(req.user._id.toString(), body);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -29,13 +60,9 @@ export class PostsController {
   updatePost(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: PostContentDto,
+    @Body() body: UpsertPostDto,
   ) {
-    return this.postsService.updatePost(
-      id,
-      req.user._id.toString(),
-      body.content,
-    );
+    return this.postsService.updatePost(id, req.user._id.toString(), body);
   }
 
   @UseGuards(JwtAuthGuard)

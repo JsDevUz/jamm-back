@@ -5,12 +5,13 @@ import {
   Get,
   Delete,
   Param,
+  Patch,
   UseGuards,
   Req,
 } from '@nestjs/common';
 import { MeetsService } from './meets.service.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
-import { CreateMeetDto } from './dto/create-meet.dto';
+import { CreateMeetDto, UpdateMeetPrivacyDto } from './dto/create-meet.dto';
 
 @Controller('meets')
 @UseGuards(JwtAuthGuard)
@@ -39,5 +40,18 @@ export class MeetsController {
   async removeMeet(@Req() req, @Param('roomId') roomId: string) {
     await this.meetsService.remove(roomId, req.user._id);
     return { success: true };
+  }
+
+  @Patch(':roomId/privacy')
+  async updateMeetPrivacy(
+    @Req() req,
+    @Param('roomId') roomId: string,
+    @Body() body: UpdateMeetPrivacyDto,
+  ) {
+    return this.meetsService.updatePrivacy(
+      roomId,
+      req.user._id,
+      body.isPrivate,
+    );
   }
 }

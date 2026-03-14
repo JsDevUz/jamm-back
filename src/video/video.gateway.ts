@@ -201,12 +201,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     try {
       const status = await this.premiumService.getPremiumStatus(userId);
-      const limit = getTierLimit(APP_LIMITS.meetsCreated, status);
 
-      if (activeRoomsCount >= limit) {
+      if (activeRoomsCount >= 1) {
         client.emit('error', {
-          message:
-            "Siz maksimal darajadagi meetlar soniga yetdingiz. Ko'proq ochish uchun Premium obunani faollashtiring.",
+          message: "Sizda allaqachon faol meet mavjud.",
         });
         return;
       }
@@ -327,6 +325,13 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.join(roomId);
   }
 
+  private emitRoomInfo(roomId: string, room: RoomInfo) {
+    this.server.to(roomId).emit('room-info', {
+      title: room.title,
+      isPrivate: room.isPrivate,
+    });
+  }
+
   // ─── Approval Flow ──────────────────────────────────────────────────────────
 
   @SubscribeMessage('approve-knock')
@@ -375,6 +380,44 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(peerId)
       .emit('knock-rejected', { reason: 'Creator rad etdi' });
+  }
+
+  @SubscribeMessage('set-room-privacy')
+  handleSetRoomPrivacy(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; isPrivate: boolean },
+  ) {
+    this.rateLimiter.take(`video:set-room-privacy:${client.id}`, 30, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!room || room.creatorSocketId !== client.id) return;
+
+    room.isPrivate = Boolean(data?.isPrivate);
+    this.emitRoomInfo(roomId, room);
+
+    if (!room.isPrivate && room.knockQueue.size > 0) {
+      for (const [peerId, entry] of Array.from(room.knockQueue.entries())) {
+        if (room.peers.size >= room.participantLimit) {
+          this.server.to(peerId).emit('knock-rejected', {
+            reason: 'Room to‘lib bo‘lgan',
+          });
+          room.knockQueue.delete(peerId);
+          continue;
+        }
+
+        room.knockQueue.delete(peerId);
+        this.server.to(peerId).emit('knock-approved', {
+          roomId,
+          title: room.title,
+          mediaLocked: false,
+        });
+        this.admitPeer(entry.socket, roomId, entry.displayName, room);
+        this.server.to(peerId).emit('room-info', {
+          title: room.title,
+          isPrivate: room.isPrivate,
+        });
+      }
+    }
   }
 
   // ─── WebRTC Signaling ────────────────────────────────────────────────────────

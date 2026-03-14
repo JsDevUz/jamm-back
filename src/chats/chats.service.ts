@@ -784,8 +784,16 @@ export class ChatsService implements OnModuleInit {
       return { jammId: groupChat.jammId };
     }
 
-    // 2. Check if slug matches a username
-    const targetUser = await this.userModel.findOne({ username: slug }).exec();
+    // 2. Check if slug matches a username or user jammId
+    const targetUser = await this.userModel
+      .findOne(
+        isJammId
+          ? {
+              $or: [{ username: slug }, { jammId: Number(slug) }],
+            }
+          : { username: slug },
+      )
+      .exec();
     if (targetUser) {
       const targetUserId = targetUser._id.toString();
       // Don't let users start a chat with themselves mapped this way (optional logic)

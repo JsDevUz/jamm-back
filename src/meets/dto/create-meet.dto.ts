@@ -15,3 +15,8 @@ export class CreateMeetDto {
   @IsBoolean()
   isPrivate: boolean;
 }
+
+export class UpdateMeetPrivacyDto {
+  @IsBoolean()
+  isPrivate: boolean;
+}

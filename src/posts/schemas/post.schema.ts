@@ -3,6 +3,23 @@ import { Document, Types } from 'mongoose';
 
 export type PostDocument = Post & Document;
 
+@Schema({ _id: false })
+export class PostImage {
+  @Prop({ required: true })
+  url: string;
+
+  @Prop({ required: true })
+  blurDataUrl: string;
+
+  @Prop({ type: Number, default: null })
+  width?: number | null;
+
+  @Prop({ type: Number, default: null })
+  height?: number | null;
+}
+
+export const PostImageSchema = SchemaFactory.createForClass(PostImage);
+
 @Schema({ timestamps: true })
 export class Post {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
@@ -11,6 +28,9 @@ export class Post {
   @Prop({ required: true })
   content: string;
 
+  @Prop({ type: [PostImageSchema], default: [] })
+  images: PostImage[];
+
   @Prop({ default: '' })
   iv: string;
 
@@ -18,7 +38,7 @@ export class Post {
   authTag: string;
 
   @Prop({ default: 'none' })
-  encryptionType: string; // 'none' | 'server'
+  encryptionType: string;
 
   @Prop({ default: false })
   isEncrypted: boolean;

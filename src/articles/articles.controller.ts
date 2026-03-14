@@ -15,21 +15,21 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { BlogsService } from './blogs.service';
+import { ArticlesService } from './articles.service';
 import {
-  BlogCommentDto,
-  BlogReplyDto,
-  UpsertBlogDto,
-} from './dto/blog.dto';
+  ArticleCommentDto,
+  ArticleReplyDto,
+  UpsertArticleDto,
+} from './dto/article.dto';
 import { UploadValidationService } from '../common/uploads/upload-validation.service';
 import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
 import { APP_LIMITS } from '../common/limits/app-limits';
 
-@Controller('blogs')
+@Controller('articles')
 @UseGuards(JwtAuthGuard)
-export class BlogsController {
+export class ArticlesController {
   constructor(
-    private readonly blogsService: BlogsService,
+    private readonly articlesService: ArticlesService,
     private readonly uploadValidationService: UploadValidationService,
   ) {}
 
@@ -43,53 +43,53 @@ export class BlogsController {
   )
   async uploadImage(@UploadedFile() file: Express.Multer.File) {
     await this.uploadValidationService.validateImageUpload(file, {
-      label: 'Blog rasmi',
+      label: 'Maqola rasmi',
     });
-    return this.blogsService.uploadImage(file);
+    return this.articlesService.uploadImage(file);
   }
 
   @Post()
-  createBlog(
+  createArticle(
     @Request() req,
-    @Body() body: UpsertBlogDto,
+    @Body() body: UpsertArticleDto,
   ) {
-    return this.blogsService.createBlog(req.user._id.toString(), body);
+    return this.articlesService.createArticle(req.user._id.toString(), body);
   }
 
   @Patch(':id')
-  updateBlog(
+  updateArticle(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: UpsertBlogDto,
+    @Body() body: UpsertArticleDto,
   ) {
-    return this.blogsService.updateBlog(id, req.user._id.toString(), body);
+    return this.articlesService.updateArticle(id, req.user._id.toString(), body);
   }
 
   @Get('user/:identifier')
-  getUserBlogs(@Request() req, @Param('identifier') identifier: string) {
-    return this.blogsService.getUserBlogs(identifier, req.user._id.toString());
+  getUserArticles(@Request() req, @Param('identifier') identifier: string) {
+    return this.articlesService.getUserArticles(identifier, req.user._id.toString());
   }
 
   @Get()
-  getLatestBlogs(
+  getLatestArticles(
     @Request() req,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.blogsService.getLatestBlogs(req.user._id.toString(), {
+    return this.articlesService.getLatestArticles(req.user._id.toString(), {
       page: Number(page) || 1,
       limit: Number(limit) || 20,
     });
   }
 
   @Get('liked')
-  getLikedBlogs(@Request() req) {
-    return this.blogsService.getLikedBlogs(req.user._id.toString());
+  getLikedArticles(@Request() req) {
+    return this.articlesService.getLikedArticles(req.user._id.toString());
   }
 
   @Get(':id/content')
-  getBlogContent(@Param('id') id: string) {
-    return this.blogsService.getBlogContent(id);
+  getArticleContent(@Param('id') id: string) {
+    return this.articlesService.getArticleContent(id);
   }
 
   @Get(':id/comments')
@@ -98,34 +98,34 @@ export class BlogsController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.blogsService.getComments(id, {
+    return this.articlesService.getComments(id, {
       page: Number(page) || 1,
       limit: Number(limit) || 10,
     });
   }
 
   @Get(':id')
-  getBlog(@Request() req, @Param('id') id: string) {
-    return this.blogsService.getBlog(id, req.user._id.toString());
+  getArticle(@Request() req, @Param('id') id: string) {
+    return this.articlesService.getArticle(id, req.user._id.toString());
   }
 
   @Post(':id/like')
-  likeBlog(@Request() req, @Param('id') id: string) {
-    return this.blogsService.likeBlog(id, req.user._id.toString());
+  likeArticle(@Request() req, @Param('id') id: string) {
+    return this.articlesService.likeArticle(id, req.user._id.toString());
   }
 
   @Post(':id/view')
-  viewBlog(@Request() req, @Param('id') id: string) {
-    return this.blogsService.viewBlog(id, req.user._id.toString());
+  viewArticle(@Request() req, @Param('id') id: string) {
+    return this.articlesService.viewArticle(id, req.user._id.toString());
   }
 
   @Post(':id/comments')
   addComment(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: BlogCommentDto,
+    @Body() body: ArticleCommentDto,
   ) {
-    return this.blogsService.addComment(
+    return this.articlesService.addComment(
       id,
       req.user._id.toString(),
       body.content,
@@ -137,9 +137,9 @@ export class BlogsController {
     @Request() req,
     @Param('id') id: string,
     @Param('commentId') commentId: string,
-    @Body() body: BlogReplyDto,
+    @Body() body: ArticleReplyDto,
   ) {
-    return this.blogsService.addReply(
+    return this.articlesService.addReply(
       id,
       commentId,
       req.user._id.toString(),
@@ -149,7 +149,7 @@ export class BlogsController {
   }
 
   @Delete(':id')
-  deleteBlog(@Request() req, @Param('id') id: string) {
-    return this.blogsService.deleteBlog(id, req.user._id.toString());
+  deleteArticle(@Request() req, @Param('id') id: string) {
+    return this.articlesService.deleteArticle(id, req.user._id.toString());
   }
 }

@@ -2,10 +2,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 import { generatePrefixedShortSlug } from '../../common/utils/prefixed-slug';
 
-export type BlogDocument = Blog & Document;
+export type ArticleDocument = Article & Document;
 
-@Schema({ timestamps: true })
-export class Blog {
+@Schema({ timestamps: true, collection: 'articles' })
+export class Article {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   author: Types.ObjectId;
 
@@ -48,7 +48,7 @@ export class Blog {
   isDeleted: boolean;
 }
 
-export const BlogSchema = SchemaFactory.createForClass(Blog);
-BlogSchema.index({ isDeleted: 1, publishedAt: -1, createdAt: -1 });
-BlogSchema.index({ author: 1, isDeleted: 1, publishedAt: -1, createdAt: -1 });
-BlogSchema.index({ isDeleted: 1, likesCount: -1, publishedAt: -1, createdAt: -1 });
+export const ArticleSchema = SchemaFactory.createForClass(Article);
+ArticleSchema.index({ isDeleted: 1, publishedAt: -1, createdAt: -1 });
+ArticleSchema.index({ author: 1, isDeleted: 1, publishedAt: -1, createdAt: -1 });
+ArticleSchema.index({ isDeleted: 1, likesCount: -1, publishedAt: -1, createdAt: -1 });

@@ -24,8 +24,11 @@ import {
   assertMaxChars,
   assertMaxWords,
   getTierLimit,
+  isPremiumStatus,
   startOfCurrentDay,
 } from '../common/limits/app-limits';
+import { R2Service } from '../common/services/r2.service';
+import { PostImageDto, UpsertPostDto } from './dto/post.dto';
 
 @Injectable()
 export class PostsService {
@@ -39,6 +42,7 @@ export class PostsService {
     private postEngagementModel: Model<PostEngagementDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private encryptionService: EncryptionService,
+    private r2Service: R2Service,
   ) {
     this.encryptionStrategy = new ServerEncryptionStrategy(
       this.encryptionService,
@@ -68,21 +72,79 @@ export class PostsService {
   }
 
   private async getPostDailyLimit(userId: string) {
-    const user = await this.userModel
-      .findById(userId)
-      .select('premiumStatus')
-      .lean()
-      .exec();
-    return getTierLimit(APP_LIMITS.postsPerDay, user?.premiumStatus);
+    const user = await this.getUserPostPermissions(userId);
+    return getTierLimit(APP_LIMITS.postsPerDay, user.premiumStatus);
   }
 
   private async getPostCommentLimit(userId: string) {
+    const user = await this.getUserPostPermissions(userId);
+    return getTierLimit(APP_LIMITS.postCommentsPerPost, user.premiumStatus);
+  }
+
+  private async getUserPostPermissions(userId: string) {
     const user = await this.userModel
       .findById(userId)
       .select('premiumStatus')
       .lean()
       .exec();
-    return getTierLimit(APP_LIMITS.postCommentsPerPost, user?.premiumStatus);
+
+    return {
+      premiumStatus: user?.premiumStatus || 'none',
+      canUseImages: isPremiumStatus(user?.premiumStatus),
+      imageLimit: getTierLimit(APP_LIMITS.postImagesPerPost, user?.premiumStatus),
+    };
+  }
+
+  private normalizePostImages(images?: PostImageDto[]) {
+    return (images || []).map((image) => ({
+      url: String(image.url || '').trim(),
+      blurDataUrl: String(image.blurDataUrl || '').trim(),
+      width:
+        typeof image.width === 'number' && Number.isFinite(image.width)
+          ? image.width
+          : null,
+      height:
+        typeof image.height === 'number' && Number.isFinite(image.height)
+          ? image.height
+          : null,
+    }));
+  }
+
+  private validatePostImages(
+    images: ReturnType<PostsService['normalizePostImages']>,
+    permissions: Awaited<ReturnType<PostsService['getUserPostPermissions']>>,
+  ) {
+    if (!images.length) {
+      return;
+    }
+
+    if (!permissions.canUseImages) {
+      throw new ForbiddenException(
+        'Feedga rasm qo‘shish faqat premium foydalanuvchilar uchun',
+      );
+    }
+
+    if (images.length > permissions.imageLimit) {
+      throw new BadRequestException(
+        `Har bir gurung uchun maksimal ${permissions.imageLimit} ta rasm qo‘shish mumkin`,
+      );
+    }
+
+    images.forEach((image, index) => {
+      if (!image.url) {
+        throw new BadRequestException(`${index + 1}-rasm URL manzili topilmadi`);
+      }
+
+      if (!/^https?:\/\//i.test(image.url)) {
+        throw new BadRequestException(`${index + 1}-rasm URL manzili noto‘g‘ri`);
+      }
+
+      if (!image.blurDataUrl.startsWith('data:image/')) {
+        throw new BadRequestException(
+          `${index + 1}-rasm blur preview ma'lumoti noto‘g‘ri`,
+        );
+      }
+    });
   }
 
   private async countUserPostComments(postId: string, userId: string) {
@@ -140,6 +202,14 @@ export class PostsService {
       content: obj.isEncrypted
         ? this.decryptContent(obj.content, obj.iv, obj.authTag, obj.keyVersion)
         : obj.content,
+      images: Array.isArray(obj.images)
+        ? obj.images.map((image) => ({
+            url: image.url,
+            blurDataUrl: image.blurDataUrl,
+            width: image.width ?? null,
+            height: image.height ?? null,
+          }))
+        : [],
       likes: Number(obj.likesCount || 0),
       liked: Boolean(engagement?.liked),
       views: Number(obj.viewsCount || 0),
@@ -173,12 +243,35 @@ export class PostsService {
     return new Map(users.map((user) => [String(user._id), user]));
   }
 
-  async createPost(userId: string, content: string) {
-    if (!String(content || '').trim()) {
-      throw new BadRequestException('Post matni bo‘sh bo‘lishi mumkin emas');
+  async uploadImage(userId: string, file: Express.Multer.File) {
+    const permissions = await this.getUserPostPermissions(userId);
+    if (!permissions.canUseImages) {
+      throw new ForbiddenException(
+        'Feedga rasm qo‘shish faqat premium foydalanuvchilar uchun',
+      );
     }
 
-    assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
+    return {
+      url: await this.r2Service.uploadFile(file, 'posts/images'),
+    };
+  }
+
+  async createPost(userId: string, payload: UpsertPostDto) {
+    const content = String(payload.content || '').trim();
+    const images = this.normalizePostImages(payload.images);
+
+    if (!content && !images.length) {
+      throw new BadRequestException(
+        'Gurung matni yoki kamida bitta rasm bo‘lishi kerak',
+      );
+    }
+
+    if (content) {
+      assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
+    }
+
+    const permissions = await this.getUserPostPermissions(userId);
+    this.validatePostImages(images, permissions);
 
     const dailyLimit = await this.getPostDailyLimit(userId);
     const todayCount = await this.postModel.countDocuments({
@@ -193,15 +286,23 @@ export class PostsService {
       );
     }
 
-    const encrypted = this.encryptionStrategy.encrypt(content);
+    const encrypted = content
+      ? this.encryptionStrategy.encrypt(content)
+      : {
+          encryptedContent: '',
+          iv: '',
+          authTag: '',
+          keyVersion: 0,
+        };
 
     const post = await this.postModel.create({
       author: new Types.ObjectId(userId),
       content: encrypted.encryptedContent,
+      images,
       iv: encrypted.iv,
       authTag: encrypted.authTag,
       encryptionType: EncryptionType.SERVER,
-      isEncrypted: true,
+      isEncrypted: Boolean(content),
       keyVersion: encrypted.keyVersion,
       likesCount: 0,
       viewsCount: 0,
@@ -220,25 +321,46 @@ export class PostsService {
     return this.formatPost(populated);
   }
 
-  async updatePost(postId: string, userId: string, content: string) {
+  async updatePost(postId: string, userId: string, payload: UpsertPostDto) {
     const post = await this.postModel.findById(postId).exec();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');
     if (post.author.toString() !== userId) {
       throw new ForbiddenException('Faqat muallif tahrirlashi mumkin');
     }
 
-    if (!String(content || '').trim()) {
-      throw new BadRequestException('Post matni bo‘sh bo‘lishi mumkin emas');
+    const content = String(payload.content || '').trim();
+    const nextImages =
+      payload.images === undefined
+        ? this.normalizePostImages((post.images || []) as PostImageDto[])
+        : this.normalizePostImages(payload.images);
+
+    if (!content && !nextImages.length) {
+      throw new BadRequestException(
+        'Gurung matni yoki kamida bitta rasm bo‘lishi kerak',
+      );
     }
 
-    assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
+    if (content) {
+      assertMaxWords('Gurung matni', content, APP_TEXT_LIMITS.postWords);
+    }
 
-    const encrypted = this.encryptionStrategy.encrypt(content);
+    const permissions = await this.getUserPostPermissions(userId);
+    this.validatePostImages(nextImages, permissions);
+
+    const encrypted = content
+      ? this.encryptionStrategy.encrypt(content)
+      : {
+          encryptedContent: '',
+          iv: '',
+          authTag: '',
+          keyVersion: 0,
+        };
     post.content = encrypted.encryptedContent;
+    post.images = nextImages as any;
     post.iv = encrypted.iv;
     post.authTag = encrypted.authTag;
     post.keyVersion = encrypted.keyVersion;
-    post.isEncrypted = true;
+    post.isEncrypted = Boolean(content);
     await post.save();
 
     const populated = await this.postModel

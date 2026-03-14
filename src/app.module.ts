@@ -14,7 +14,7 @@ import { PremiumModule } from './premium/premium.module';
 import { MeetsModule } from './meets/meets.module';
 import { PostsModule } from './posts/posts.module';
 import { ArenaModule } from './arena/arena.module';
-import { BlogsModule } from './blogs/blogs.module';
+import { ArticlesModule } from './articles/articles.module';
 import { AppSettingsModule } from './app-settings/app-settings.module';
 import { AppAccessGuard } from './auth/guards/app-access.guard';
 import { CommonModule } from './common/common.module';
@@ -47,7 +47,7 @@ import { AdminModule } from './admin/admin.module';
     MeetsModule,
     PostsModule,
     ArenaModule,
-    BlogsModule,
+    ArticlesModule,
     AppSettingsModule,
     AdminModule,
   ],

@@ -7,12 +7,12 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Blog, BlogDocument } from './schemas/blog.schema';
-import { BlogComment, BlogCommentDocument } from './schemas/blog-comment.schema';
+import { Article, ArticleDocument } from './schemas/article.schema';
+import { ArticleComment, ArticleCommentDocument } from './schemas/article-comment.schema';
 import {
-  BlogEngagement,
-  BlogEngagementDocument,
-} from './schemas/blog-engagement.schema';
+  ArticleEngagement,
+  ArticleEngagementDocument,
+} from './schemas/article-engagement.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { R2Service } from '../common/services/r2.service';
 import {
@@ -29,7 +29,7 @@ import {
   sanitizePrefixedSlug,
 } from '../common/utils/prefixed-slug';
 
-type BlogPayload = {
+type ArticlePayload = {
   title: string;
   markdown: string;
   excerpt?: string;
@@ -38,13 +38,13 @@ type BlogPayload = {
 };
 
 @Injectable()
-export class BlogsService implements OnModuleInit {
+export class ArticlesService implements OnModuleInit {
   constructor(
-    @InjectModel(Blog.name) private blogModel: Model<BlogDocument>,
-    @InjectModel(BlogComment.name)
-    private blogCommentModel: Model<BlogCommentDocument>,
-    @InjectModel(BlogEngagement.name)
-    private blogEngagementModel: Model<BlogEngagementDocument>,
+    @InjectModel(Article.name) private articleModel: Model<ArticleDocument>,
+    @InjectModel(ArticleComment.name)
+    private articleCommentModel: Model<ArticleCommentDocument>,
+    @InjectModel(ArticleEngagement.name)
+    private articleEngagementModel: Model<ArticleEngagementDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private r2Service: R2Service,
   ) {}
@@ -74,7 +74,7 @@ export class BlogsService implements OnModuleInit {
       .map((tag) => String(tag || '').trim().toLowerCase())
       .filter(Boolean)
       .map((tag) => {
-        assertMaxChars('Blog tegi', tag, APP_TEXT_LIMITS.blogTagChars);
+        assertMaxChars('Article tegi', tag, APP_TEXT_LIMITS.articleTagChars);
         return tag;
       })
       .slice(0, 8);
@@ -95,7 +95,7 @@ export class BlogsService implements OnModuleInit {
     return base.slice(0, 220).trim();
   }
 
-  private async getBlogLimits(userId: string) {
+  private async getArticleLimits(userId: string) {
     const user = await this.userModel
       .findById(userId)
       .select('premiumStatus')
@@ -103,42 +103,42 @@ export class BlogsService implements OnModuleInit {
       .exec();
 
     return {
-      blogCount: getTierLimit(APP_LIMITS.blogsPerUser, user?.premiumStatus),
+      articleCount: getTierLimit(APP_LIMITS.articlesPerUser, user?.premiumStatus),
       commentCount: getTierLimit(
-        APP_LIMITS.blogCommentsPerBlog,
+        APP_LIMITS.articleCommentsPerArticle,
         user?.premiumStatus,
       ),
       imageCount: getTierLimit(
-        APP_LIMITS.blogImagesPerBlog,
+        APP_LIMITS.articleImagesPerArticle,
         user?.premiumStatus,
       ),
-      wordCount: getTierLimit(APP_LIMITS.blogWords, user?.premiumStatus),
+      wordCount: getTierLimit(APP_LIMITS.articleWords, user?.premiumStatus),
     };
   }
 
-  private async countUserComments(blogId: string, userId: string) {
-    return this.blogCommentModel.countDocuments({
-      blogId: new Types.ObjectId(blogId),
+  private async countUserComments(articleId: string, userId: string) {
+    return this.articleCommentModel.countDocuments({
+      articleId: new Types.ObjectId(articleId),
       userId: new Types.ObjectId(userId),
       isDeleted: false,
     });
   }
 
-  private validateBlogPayload(
-    payload: BlogPayload,
+  private validateArticlePayload(
+    payload: ArticlePayload,
     limits: { imageCount: number; wordCount: number },
   ) {
-    assertMaxChars('Blog sarlavhasi', payload.title, APP_TEXT_LIMITS.blogTitleChars);
+    assertMaxChars('Article sarlavhasi', payload.title, APP_TEXT_LIMITS.articleTitleChars);
     assertMaxChars(
       'Qisqa tavsif',
       payload.excerpt,
-      APP_TEXT_LIMITS.blogExcerptChars,
+      APP_TEXT_LIMITS.articleExcerptChars,
     );
 
     const markdownWordCount = countWords(payload.markdown);
     if (markdownWordCount > limits.wordCount) {
       throw new BadRequestException(
-        `Blog matni maksimal ${limits.wordCount} ta so'zdan oshmasligi kerak`,
+        `Article matni maksimal ${limits.wordCount} ta so'zdan oshmasligi kerak`,
       );
     }
 
@@ -146,13 +146,13 @@ export class BlogsService implements OnModuleInit {
       countMarkdownImages(payload.markdown) + (payload.coverImage ? 1 : 0);
     if (totalImages > limits.imageCount) {
       throw new BadRequestException(
-        `Har bir blog uchun maksimal ${limits.imageCount} ta rasm ishlatish mumkin`,
+        `Har bir article uchun maksimal ${limits.imageCount} ta rasm ishlatish mumkin`,
       );
     }
   }
 
-  private buildMarkdownKey(userId: string, blogId: string) {
-    return `blogs/markdown/${userId}/${blogId}.md`;
+  private buildMarkdownKey(userId: string, articleId: string) {
+    return `articles/markdown/${userId}/${articleId}.md`;
   }
 
   private extractMarkdownImageUrls(markdown: string) {
@@ -179,18 +179,18 @@ export class BlogsService implements OnModuleInit {
     return isPrefixedShortSlug(value, ':');
   }
 
-  private async generateUniqueBlogSlug(
+  private async generateUniqueArticleSlug(
     preferredSlug?: string,
-    excludeBlogId?: string,
+    excludeArticleId?: string,
   ) {
     const normalizedPreferred = sanitizePrefixedSlug(preferredSlug, ':');
 
     if (normalizedPreferred && this.isShortSlug(normalizedPreferred)) {
-      const existingPreferred = await this.blogModel
+      const existingPreferred = await this.articleModel
         .findOne({
           slug: normalizedPreferred,
-          ...(excludeBlogId
-            ? { _id: { $ne: new Types.ObjectId(excludeBlogId) } }
+          ...(excludeArticleId
+            ? { _id: { $ne: new Types.ObjectId(excludeArticleId) } }
             : {}),
         })
         .select('_id')
@@ -204,11 +204,11 @@ export class BlogsService implements OnModuleInit {
 
     while (true) {
       const slug = generatePrefixedShortSlug(':', 8);
-      const existing = await this.blogModel
+      const existing = await this.articleModel
         .findOne({
           slug,
-          ...(excludeBlogId
-            ? { _id: { $ne: new Types.ObjectId(excludeBlogId) } }
+          ...(excludeArticleId
+            ? { _id: { $ne: new Types.ObjectId(excludeArticleId) } }
             : {}),
         })
         .select('_id')
@@ -222,46 +222,46 @@ export class BlogsService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    const blogs = await this.blogModel.find({}).select('_id slug').exec();
+    const articles = await this.articleModel.find({}).select('_id slug').exec();
     const seenSlugs = new Set<string>();
     let shouldSave = false;
 
-    for (const blog of blogs) {
-      const currentSlug = String(blog.slug || '').trim().toLowerCase();
+    for (const article of articles) {
+      const currentSlug = String(article.slug || '').trim().toLowerCase();
       const normalizedSlug = sanitizePrefixedSlug(currentSlug, ':');
       const slugIsReusable =
         this.isShortSlug(normalizedSlug) && !seenSlugs.has(normalizedSlug);
 
       if (!slugIsReusable) {
-        blog.slug = await this.generateUniqueBlogSlug(undefined, blog._id.toString());
+        article.slug = await this.generateUniqueArticleSlug(undefined, article._id.toString());
         shouldSave = true;
       }
 
-      seenSlugs.add(String(blog.slug));
+      seenSlugs.add(String(article.slug));
     }
 
     if (shouldSave) {
-      await Promise.all(blogs.map((blog) => blog.save()));
+      await Promise.all(articles.map((article) => article.save()));
     }
   }
 
-  private async getEngagementMap(blogIds: string[], currentUserId?: string) {
-    if (!currentUserId || !blogIds.length) {
+  private async getEngagementMap(articleIds: string[], currentUserId?: string) {
+    if (!currentUserId || !articleIds.length) {
       return new Map<string, { liked: boolean; viewed: boolean }>();
     }
 
-    const engagements = await this.blogEngagementModel
+    const engagements = await this.articleEngagementModel
       .find({
-        blogId: { $in: blogIds.map((id) => new Types.ObjectId(id)) },
+        articleId: { $in: articleIds.map((id) => new Types.ObjectId(id)) },
         userId: new Types.ObjectId(currentUserId),
       })
-      .select('blogId liked viewed')
+      .select('articleId liked viewed')
       .lean()
       .exec();
 
     return new Map(
       engagements.map((item) => [
-        String(item.blogId),
+        String(item.articleId),
         {
           liked: Boolean(item.liked),
           viewed: Boolean(item.viewed),
@@ -270,11 +270,11 @@ export class BlogsService implements OnModuleInit {
     );
   }
 
-  private formatBlog(
-    blog: any,
+  private formatArticle(
+    article: any,
     engagementMap?: Map<string, { liked: boolean; viewed: boolean }>,
   ) {
-    const obj = typeof blog.toObject === 'function' ? blog.toObject() : blog;
+    const obj = typeof article.toObject === 'function' ? article.toObject() : article;
     const engagement = engagementMap?.get(String(obj._id));
 
     return {
@@ -306,13 +306,13 @@ export class BlogsService implements OnModuleInit {
     };
   }
 
-  private async resolveBlog(identifier: string) {
+  private async resolveArticle(identifier: string) {
     const filter =
       Types.ObjectId.isValid(identifier) && identifier.length === 24
         ? { _id: new Types.ObjectId(identifier) }
         : { slug: identifier };
 
-    const blog = await this.blogModel
+    const article = await this.articleModel
       .findOne({ ...filter, isDeleted: false })
       .populate(
         'author',
@@ -320,11 +320,11 @@ export class BlogsService implements OnModuleInit {
       )
       .exec();
 
-    if (!blog) {
-      throw new NotFoundException('Blog topilmadi');
+    if (!article) {
+      throw new NotFoundException('Article topilmadi');
     }
 
-    return blog;
+    return article;
   }
 
   private async resolveCommentUsers(comments: any[]) {
@@ -356,36 +356,36 @@ export class BlogsService implements OnModuleInit {
     }
 
     return {
-      url: await this.r2Service.uploadFile(file, 'blogs/images'),
+      url: await this.r2Service.uploadFile(file, 'articles/images'),
     };
   }
 
-  async createBlog(userId: string, payload: BlogPayload) {
+  async createArticle(userId: string, payload: ArticlePayload) {
     if (!payload.title?.trim()) {
       throw new BadRequestException('Sarlavha majburiy');
     }
 
     if (!payload.markdown?.trim()) {
-      throw new BadRequestException('Blog matni majburiy');
+      throw new BadRequestException('Article matni majburiy');
     }
 
-    const limits = await this.getBlogLimits(userId);
-    const currentCount = await this.blogModel.countDocuments({
+    const limits = await this.getArticleLimits(userId);
+    const currentCount = await this.articleModel.countDocuments({
       author: new Types.ObjectId(userId),
       isDeleted: false,
     });
 
-    if (currentCount >= limits.blogCount) {
+    if (currentCount >= limits.articleCount) {
       throw new ForbiddenException(
-        `Siz maksimal ${limits.blogCount} ta blog yarata olasiz`,
+        `Siz maksimal ${limits.articleCount} ta article yarata olasiz`,
       );
     }
 
-    this.validateBlogPayload(payload, limits);
+    this.validateArticlePayload(payload, limits);
 
-    const slug = await this.generateUniqueBlogSlug();
+    const slug = await this.generateUniqueArticleSlug();
 
-    const blog = await this.blogModel.create({
+    const article = await this.articleModel.create({
       author: new Types.ObjectId(userId),
       title: payload.title.trim(),
       slug,
@@ -398,18 +398,18 @@ export class BlogsService implements OnModuleInit {
       commentsCount: 0,
     });
 
-    const markdownKey = this.buildMarkdownKey(userId, blog._id.toString());
+    const markdownKey = this.buildMarkdownKey(userId, article._id.toString());
     const markdownUrl = await this.r2Service.uploadBuffer(
       Buffer.from(payload.markdown, 'utf-8'),
       markdownKey,
       'text/markdown; charset=utf-8',
     );
 
-    blog.markdownUrl = markdownUrl;
-    await blog.save();
+    article.markdownUrl = markdownUrl;
+    await article.save();
 
-    const populated = await this.blogModel
-      .findById(blog._id)
+    const populated = await this.articleModel
+      .findById(article._id)
       .populate(
         'author',
         'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
@@ -417,13 +417,13 @@ export class BlogsService implements OnModuleInit {
       .lean()
       .exec();
 
-    return this.formatBlog(populated);
+    return this.formatArticle(populated);
   }
 
-  async updateBlog(blogId: string, userId: string, payload: BlogPayload) {
-    const blog = await this.resolveBlog(blogId);
+  async updateArticle(articleId: string, userId: string, payload: ArticlePayload) {
+    const article = await this.resolveArticle(articleId);
 
-    if (blog.author._id.toString() !== userId.toString()) {
+    if (article.author._id.toString() !== userId.toString()) {
       throw new ForbiddenException('Faqat muallif tahrirlashi mumkin');
     }
 
@@ -432,39 +432,39 @@ export class BlogsService implements OnModuleInit {
     }
 
     if (!payload.markdown?.trim()) {
-      throw new BadRequestException('Blog matni majburiy');
+      throw new BadRequestException('Article matni majburiy');
     }
 
-    const limits = await this.getBlogLimits(userId);
-    this.validateBlogPayload(payload, limits);
+    const limits = await this.getArticleLimits(userId);
+    this.validateArticlePayload(payload, limits);
 
     let previousMarkdownContent = '';
     try {
-      previousMarkdownContent = await this.r2Service.getFileText(blog.markdownUrl);
+      previousMarkdownContent = await this.r2Service.getFileText(article.markdownUrl);
     } catch (error) {
-      console.error('Failed to read previous blog markdown before update:', error);
+      console.error('Failed to read previous article markdown before update:', error);
     }
 
     const previousAssets = this.collectManagedAssetUrls(
       previousMarkdownContent,
-      blog.coverImage,
-      blog.markdownUrl,
+      article.coverImage,
+      article.markdownUrl,
     );
 
-    const markdownKey = this.buildMarkdownKey(userId, blog._id.toString());
+    const markdownKey = this.buildMarkdownKey(userId, article._id.toString());
     const markdownUrl = await this.r2Service.uploadBuffer(
       Buffer.from(payload.markdown, 'utf-8'),
       markdownKey,
       'text/markdown; charset=utf-8',
     );
 
-    blog.title = payload.title.trim();
-    blog.slug = blog.slug || (await this.generateUniqueBlogSlug(undefined, blog._id.toString()));
-    blog.excerpt = this.buildExcerpt(payload.markdown, payload.excerpt);
-    blog.coverImage = (payload.coverImage || '').trim();
-    blog.tags = this.normalizeTags(payload.tags);
-    blog.markdownUrl = markdownUrl;
-    await blog.save();
+    article.title = payload.title.trim();
+    article.slug = article.slug || (await this.generateUniqueArticleSlug(undefined, article._id.toString()));
+    article.excerpt = this.buildExcerpt(payload.markdown, payload.excerpt);
+    article.coverImage = (payload.coverImage || '').trim();
+    article.tags = this.normalizeTags(payload.tags);
+    article.markdownUrl = markdownUrl;
+    await article.save();
 
     const nextAssets = new Set(
       this.collectManagedAssetUrls(payload.markdown, payload.coverImage, markdownUrl),
@@ -475,8 +475,8 @@ export class BlogsService implements OnModuleInit {
       removedAssets.map((assetUrl) => this.r2Service.deleteFile(assetUrl)),
     );
 
-    const updated = await this.blogModel
-      .findById(blog._id)
+    const updated = await this.articleModel
+      .findById(article._id)
       .populate(
         'author',
         'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
@@ -484,14 +484,14 @@ export class BlogsService implements OnModuleInit {
       .lean()
       .exec();
 
-    return this.formatBlog(updated);
+    return this.formatArticle(updated);
   }
 
-  async getUserBlogs(identifier: string, currentUserId?: string) {
+  async getUserArticles(identifier: string, currentUserId?: string) {
     const authorId = await this.resolveUserId(identifier);
     if (!authorId) return [];
 
-    const blogs = await this.blogModel
+    const articles = await this.articleModel
       .find({ author: authorId, isDeleted: false })
       .sort({ publishedAt: -1, createdAt: -1 })
       .populate(
@@ -502,26 +502,26 @@ export class BlogsService implements OnModuleInit {
       .exec();
 
     const engagementMap = await this.getEngagementMap(
-      blogs.map((blog) => String(blog._id)),
+      articles.map((article) => String(article._id)),
       currentUserId,
     );
 
-    return blogs.map((blog) => this.formatBlog(blog, engagementMap));
+    return articles.map((article) => this.formatArticle(article, engagementMap));
   }
 
-  async getLikedBlogs(userId: string) {
-    const engagements = await this.blogEngagementModel
+  async getLikedArticles(userId: string) {
+    const engagements = await this.articleEngagementModel
       .find({ userId: new Types.ObjectId(userId), liked: true })
       .sort({ updatedAt: -1 })
       .limit(50)
       .lean()
       .exec();
 
-    const blogIds = engagements.map((item) => item.blogId);
-    if (!blogIds.length) return [];
+    const articleIds = engagements.map((item) => item.articleId);
+    if (!articleIds.length) return [];
 
-    const blogs = await this.blogModel
-      .find({ _id: { $in: blogIds }, isDeleted: false })
+    const articles = await this.articleModel
+      .find({ _id: { $in: articleIds }, isDeleted: false })
       .sort({ updatedAt: -1, publishedAt: -1, createdAt: -1 })
       .populate(
         'author',
@@ -531,25 +531,25 @@ export class BlogsService implements OnModuleInit {
       .exec();
 
     const engagementMap = await this.getEngagementMap(
-      blogs.map((blog) => String(blog._id)),
+      articles.map((article) => String(article._id)),
       userId,
     );
-    const blogMap = new Map(blogs.map((blog) => [String(blog._id), blog]));
+    const articleMap = new Map(articles.map((article) => [String(article._id), article]));
 
-    return blogIds
-      .map((blogId) => blogMap.get(String(blogId)))
+    return articleIds
+      .map((articleId) => articleMap.get(String(articleId)))
       .filter(Boolean)
-      .map((blog) => this.formatBlog(blog, engagementMap));
+      .map((article) => this.formatArticle(article, engagementMap));
   }
 
-  async getLatestBlogs(
+  async getLatestArticles(
     currentUserId?: string,
     pagination: { page: number; limit: number } = { page: 1, limit: 20 },
   ) {
     const skip = (pagination.page - 1) * pagination.limit;
 
-    const [blogs, total] = await Promise.all([
-      this.blogModel
+    const [articles, total] = await Promise.all([
+      this.articleModel
         .find({ isDeleted: false })
         .sort({ publishedAt: -1, createdAt: -1 })
         .skip(skip)
@@ -560,16 +560,16 @@ export class BlogsService implements OnModuleInit {
         )
         .lean()
         .exec(),
-      this.blogModel.countDocuments({ isDeleted: false }),
+      this.articleModel.countDocuments({ isDeleted: false }),
     ]);
 
     const engagementMap = await this.getEngagementMap(
-      blogs.map((blog) => String(blog._id)),
+      articles.map((article) => String(article._id)),
       currentUserId,
     );
 
     return {
-      data: blogs.map((blog) => this.formatBlog(blog, engagementMap)),
+      data: articles.map((article) => this.formatArticle(article, engagementMap)),
       total,
       page: pagination.page,
       limit: pagination.limit,
@@ -577,54 +577,54 @@ export class BlogsService implements OnModuleInit {
     };
   }
 
-  async getBlog(identifier: string, currentUserId?: string) {
-    const blog = await this.resolveBlog(identifier);
+  async getArticle(identifier: string, currentUserId?: string) {
+    const article = await this.resolveArticle(identifier);
     const engagementMap = await this.getEngagementMap(
-      [String(blog._id)],
+      [String(article._id)],
       currentUserId,
     );
-    return this.formatBlog(blog, engagementMap);
+    return this.formatArticle(article, engagementMap);
   }
 
-  async getBlogContent(identifier: string) {
-    const blog = await this.resolveBlog(identifier);
-    const content = await this.r2Service.getFileText(blog.markdownUrl);
+  async getArticleContent(identifier: string) {
+    const article = await this.resolveArticle(identifier);
+    const content = await this.r2Service.getFileText(article.markdownUrl);
 
     return {
       content,
-      markdownUrl: blog.markdownUrl,
+      markdownUrl: article.markdownUrl,
     };
   }
 
-  async likeBlog(identifier: string, userId: string) {
-    const blog = await this.resolveBlog(identifier);
-    const existing = await this.blogEngagementModel.findOne({
-      blogId: blog._id,
+  async likeArticle(identifier: string, userId: string) {
+    const article = await this.resolveArticle(identifier);
+    const existing = await this.articleEngagementModel.findOne({
+      articleId: article._id,
       userId: new Types.ObjectId(userId),
     });
     const nextLiked = !existing?.liked;
 
-    await this.blogEngagementModel.findOneAndUpdate(
-      { blogId: blog._id, userId: new Types.ObjectId(userId) },
+    await this.articleEngagementModel.findOneAndUpdate(
+      { articleId: article._id, userId: new Types.ObjectId(userId) },
       { $set: { liked: nextLiked } },
       { upsert: true, new: true },
     );
-    await this.blogModel
-      .updateOne({ _id: blog._id }, { $inc: { likesCount: nextLiked ? 1 : -1 } })
+    await this.articleModel
+      .updateOne({ _id: article._id }, { $inc: { likesCount: nextLiked ? 1 : -1 } })
       .exec();
 
-    const refreshed = await this.blogModel.findById(blog._id).select('likesCount').lean();
+    const refreshed = await this.articleModel.findById(article._id).select('likesCount').lean();
     return {
       liked: nextLiked,
       likes: Number(refreshed?.likesCount || 0),
     };
   }
 
-  async viewBlog(identifier: string, userId: string) {
-    const blog = await this.resolveBlog(identifier);
-    const existing = await this.blogEngagementModel
+  async viewArticle(identifier: string, userId: string) {
+    const article = await this.resolveArticle(identifier);
+    const existing = await this.articleEngagementModel
       .findOne({
-        blogId: blog._id,
+        articleId: article._id,
         userId: new Types.ObjectId(userId),
       })
       .select('viewed')
@@ -632,46 +632,46 @@ export class BlogsService implements OnModuleInit {
       .exec();
 
     if (!existing?.viewed) {
-      await this.blogEngagementModel.findOneAndUpdate(
-        { blogId: blog._id, userId: new Types.ObjectId(userId) },
+      await this.articleEngagementModel.findOneAndUpdate(
+        { articleId: article._id, userId: new Types.ObjectId(userId) },
         { $set: { viewed: true } },
         { upsert: true, new: true },
       );
-      await this.blogModel
-        .updateOne({ _id: blog._id }, { $inc: { viewsCount: 1 } })
+      await this.articleModel
+        .updateOne({ _id: article._id }, { $inc: { viewsCount: 1 } })
         .exec();
     }
 
-    const refreshed = await this.blogModel.findById(blog._id).select('viewsCount').lean();
+    const refreshed = await this.articleModel.findById(article._id).select('viewsCount').lean();
     return { views: Number(refreshed?.viewsCount || 0) };
   }
 
   async addComment(identifier: string, userId: string, content: string) {
-    const blog = await this.resolveBlog(identifier);
+    const article = await this.resolveArticle(identifier);
 
     if (!content?.trim()) {
       throw new BadRequestException('Izoh bo‘sh bo‘lishi mumkin emas');
     }
 
-    assertMaxChars('Blog izohi', content.trim(), APP_TEXT_LIMITS.blogCommentChars);
-    const limits = await this.getBlogLimits(userId);
-    if ((await this.countUserComments(blog._id.toString(), userId)) >= limits.commentCount) {
+    assertMaxChars('Article izohi', content.trim(), APP_TEXT_LIMITS.articleCommentChars);
+    const limits = await this.getArticleLimits(userId);
+    if ((await this.countUserComments(article._id.toString(), userId)) >= limits.commentCount) {
       throw new ForbiddenException(
-        `Bu blog uchun maksimal ${limits.commentCount} ta izoh yozishingiz mumkin`,
+        `Bu article uchun maksimal ${limits.commentCount} ta izoh yozishingiz mumkin`,
       );
     }
 
-    await this.blogCommentModel.create({
-      blogId: blog._id,
+    await this.articleCommentModel.create({
+      articleId: article._id,
       userId: new Types.ObjectId(userId),
       parentCommentId: null,
       content: content.trim(),
     });
-    await this.blogModel
-      .updateOne({ _id: blog._id }, { $inc: { commentsCount: 1 } })
+    await this.articleModel
+      .updateOne({ _id: article._id }, { $inc: { commentsCount: 1 } })
       .exec();
 
-    const refreshed = await this.blogModel.findById(blog._id).select('commentsCount').lean();
+    const refreshed = await this.articleModel.findById(article._id).select('commentsCount').lean();
     return { comments: Number(refreshed?.commentsCount || 0) };
   }
 
@@ -682,7 +682,7 @@ export class BlogsService implements OnModuleInit {
     content: string,
     replyToUser?: string,
   ) {
-    const blog = await this.resolveBlog(identifier);
+    const article = await this.resolveArticle(identifier);
 
     if (!Types.ObjectId.isValid(commentId)) {
       throw new BadRequestException('Izoh identifikatori noto‘g‘ri');
@@ -692,12 +692,12 @@ export class BlogsService implements OnModuleInit {
       throw new BadRequestException('Javob bo‘sh bo‘lishi mumkin emas');
     }
 
-    assertMaxChars('Blog javobi', content.trim(), APP_TEXT_LIMITS.blogCommentChars);
+    assertMaxChars('Article javobi', content.trim(), APP_TEXT_LIMITS.articleCommentChars);
 
-    const parentComment = await this.blogCommentModel
+    const parentComment = await this.articleCommentModel
       .findOne({
         _id: new Types.ObjectId(commentId),
-        blogId: blog._id,
+        articleId: article._id,
         parentCommentId: null,
         isDeleted: false,
       })
@@ -708,25 +708,25 @@ export class BlogsService implements OnModuleInit {
       throw new NotFoundException('Izoh topilmadi');
     }
 
-    const limits = await this.getBlogLimits(userId);
-    if ((await this.countUserComments(blog._id.toString(), userId)) >= limits.commentCount) {
+    const limits = await this.getArticleLimits(userId);
+    if ((await this.countUserComments(article._id.toString(), userId)) >= limits.commentCount) {
       throw new ForbiddenException(
-        `Bu blog uchun maksimal ${limits.commentCount} ta izoh yozishingiz mumkin`,
+        `Bu article uchun maksimal ${limits.commentCount} ta izoh yozishingiz mumkin`,
       );
     }
 
-    await this.blogCommentModel.create({
-      blogId: blog._id,
+    await this.articleCommentModel.create({
+      articleId: article._id,
       userId: new Types.ObjectId(userId),
       parentCommentId: parentComment._id,
       content: content.trim(),
       replyToUser: replyToUser || '',
     });
-    await this.blogModel
-      .updateOne({ _id: blog._id }, { $inc: { commentsCount: 1 } })
+    await this.articleModel
+      .updateOne({ _id: article._id }, { $inc: { commentsCount: 1 } })
       .exec();
 
-    const replies = await this.blogCommentModel.countDocuments({
+    const replies = await this.articleCommentModel.countDocuments({
       parentCommentId: parentComment._id,
       isDeleted: false,
     });
@@ -737,7 +737,7 @@ export class BlogsService implements OnModuleInit {
     identifier: string,
     pagination: { page: number; limit: number } = { page: 1, limit: 10 },
   ) {
-    const blog = await this.blogModel
+    const article = await this.articleModel
       .findOne({
         ...(Types.ObjectId.isValid(identifier) && identifier.length === 24
           ? { _id: new Types.ObjectId(identifier) }
@@ -748,15 +748,15 @@ export class BlogsService implements OnModuleInit {
       .lean()
       .exec();
 
-    if (!blog) {
-      throw new NotFoundException('Blog topilmadi');
+    if (!article) {
+      throw new NotFoundException('Article topilmadi');
     }
 
     const skip = (pagination.page - 1) * pagination.limit;
     const [comments, total] = await Promise.all([
-      this.blogCommentModel
+      this.articleCommentModel
         .find({
-          blogId: blog._id,
+          articleId: article._id,
           parentCommentId: null,
           isDeleted: false,
         })
@@ -765,16 +765,16 @@ export class BlogsService implements OnModuleInit {
         .limit(pagination.limit)
         .lean()
         .exec(),
-      this.blogCommentModel.countDocuments({
-        blogId: blog._id,
+      this.articleCommentModel.countDocuments({
+        articleId: article._id,
         parentCommentId: null,
         isDeleted: false,
       }),
     ]);
 
-    const replies = await this.blogCommentModel
+    const replies = await this.articleCommentModel
       .find({
-        blogId: blog._id,
+        articleId: article._id,
         parentCommentId: { $in: comments.map((comment) => comment._id) },
         isDeleted: false,
       })
@@ -815,35 +815,35 @@ export class BlogsService implements OnModuleInit {
     };
   }
 
-  async deleteBlog(identifier: string, userId: string) {
-    const blog = await this.resolveBlog(identifier);
+  async deleteArticle(identifier: string, userId: string) {
+    const article = await this.resolveArticle(identifier);
 
-    if (blog.author._id.toString() !== userId.toString()) {
+    if (article.author._id.toString() !== userId.toString()) {
       throw new ForbiddenException("Faqat muallif o'chirishi mumkin");
     }
 
     let markdownContent = '';
     try {
-      markdownContent = await this.r2Service.getFileText(blog.markdownUrl);
+      markdownContent = await this.r2Service.getFileText(article.markdownUrl);
     } catch (error) {
-      console.error('Failed to read blog markdown before deletion:', error);
+      console.error('Failed to read article markdown before deletion:', error);
     }
 
-    blog.isDeleted = true;
-    blog.likesCount = 0;
-    blog.viewsCount = 0;
-    blog.commentsCount = 0;
-    await blog.save();
+    article.isDeleted = true;
+    article.likesCount = 0;
+    article.viewsCount = 0;
+    article.commentsCount = 0;
+    await article.save();
 
     await Promise.all([
-      this.blogCommentModel.deleteMany({ blogId: blog._id }).exec(),
-      this.blogEngagementModel.deleteMany({ blogId: blog._id }).exec(),
+      this.articleCommentModel.deleteMany({ articleId: article._id }).exec(),
+      this.articleEngagementModel.deleteMany({ articleId: article._id }).exec(),
     ]);
 
     const assetUrls = this.collectManagedAssetUrls(
       markdownContent,
-      blog.coverImage,
-      blog.markdownUrl,
+      article.coverImage,
+      article.markdownUrl,
     );
 
     await Promise.allSettled(

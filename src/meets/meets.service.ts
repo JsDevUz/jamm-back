@@ -7,19 +7,12 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Meet, MeetDocument } from './schemas/meet.schema.js';
-import { User, UserDocument } from '../users/schemas/user.schema';
-import {
-  APP_LIMITS,
-  APP_TEXT_LIMITS,
-  assertMaxChars,
-  getTierLimit,
-} from '../common/limits/app-limits';
+import { APP_TEXT_LIMITS, assertMaxChars } from '../common/limits/app-limits';
 
 @Injectable()
 export class MeetsService {
   constructor(
     @InjectModel(Meet.name) private meetModel: Model<MeetDocument>,
-    @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) {}
 
   async create(data: {
@@ -35,19 +28,11 @@ export class MeetsService {
       throw new ConflictException('Bu room ID allaqachon band');
     }
 
-    const user = await this.userModel
-      .findById(data.creator)
-      .select('premiumStatus')
-      .lean()
-      .exec();
-    const limit = getTierLimit(APP_LIMITS.meetsCreated, user?.premiumStatus);
     const currentCount = await this.meetModel.countDocuments({
       creator: new Types.ObjectId(data.creator),
     });
-    if (currentCount >= limit) {
-      throw new ForbiddenException(
-        `Siz maksimal ${limit} ta video meet yarata olasiz`,
-      );
+    if (currentCount >= 1) {
+      throw new ForbiddenException('Sizda allaqachon faol meet mavjud');
     }
 
     const meet = new this.meetModel(data);
@@ -78,5 +63,25 @@ export class MeetsService {
     if (result.deletedCount === 0) {
       throw new NotFoundException('Meet not found or unauthorized');
     }
+  }
+
+  async updatePrivacy(
+    roomId: string,
+    userId: string,
+    isPrivate: boolean,
+  ): Promise<Meet> {
+    const meet = await this.meetModel
+      .findOneAndUpdate(
+        { roomId, creator: new Types.ObjectId(userId) },
+        { $set: { isPrivate } },
+        { new: true },
+      )
+      .exec();
+
+    if (!meet) {
+      throw new NotFoundException('Meet not found or unauthorized');
+    }
+
+    return meet;
   }
 }
