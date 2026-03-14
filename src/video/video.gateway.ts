@@ -35,6 +35,8 @@ interface RoomInfo {
   knockQueue: Map<string, KnockEntry>;
 }
 
+const ROOM_ID_PATTERN = /^[a-zA-Z0-9_-]{4,128}$/;
+
 @WebSocketGateway({
   cors: { origin: getAllowedOrigins(), methods: ['GET', 'POST'], credentials: true },
   namespace: '/video',
@@ -175,12 +177,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    if (
-      !roomId ||
-      roomId.length < 8 ||
-      roomId.length > 128 ||
-      !/^[a-zA-Z0-9-]+$/.test(roomId)
-    ) {
+    if (!ROOM_ID_PATTERN.test(roomId)) {
       client.emit('error', { message: 'Room ID noto‘g‘ri' });
       return;
     }

@@ -3,9 +3,9 @@ import { APP_TEXT_LIMITS } from '../../common/limits/app-limits';
 
 export class CreateMeetDto {
   @IsString()
-  @MinLength(8)
+  @MinLength(4)
   @MaxLength(128)
-  @Matches(/^[a-zA-Z0-9-]+$/)
+  @Matches(/^[a-zA-Z0-9_-]+$/)
   roomId: string;
 
   @IsString()
