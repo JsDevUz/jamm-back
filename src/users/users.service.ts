@@ -419,6 +419,12 @@ export class UsersService {
     return this.userModel.findOne({ verificationToken: token }).exec();
   }
 
+  async findByPasswordResetToken(
+    token: string,
+  ): Promise<UserDocument | null> {
+    return this.userModel.findOne({ passwordResetToken: token }).exec();
+  }
+
   async deleteById(id: string): Promise<void> {
     await this.userModel.findByIdAndDelete(id).exec();
   }

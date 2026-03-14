@@ -18,7 +18,9 @@ export class AppAccessGuard implements CanActivate {
       path.startsWith('/app/status') ||
       path.startsWith('/auth/login') ||
       path.startsWith('/auth/signup') ||
-      path.startsWith('/auth/verify')
+      path.startsWith('/auth/verify') ||
+      path.startsWith('/auth/forgot-password') ||
+      path.startsWith('/auth/reset-password')
     ) {
       return true;
     }

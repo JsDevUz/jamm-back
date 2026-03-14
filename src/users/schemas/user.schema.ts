@@ -76,6 +76,12 @@ export class User {
   @Prop({ type: String, default: null })
   verificationToken: string | null;
 
+  @Prop({ type: String, default: null })
+  passwordResetToken: string | null;
+
+  @Prop({ type: Date, default: null })
+  passwordResetExpiresAt: Date | null;
+
   // Short numeric ID used in profile URLs like /profile/142857
   @Prop({ unique: true, sparse: true })
   jammId: number;

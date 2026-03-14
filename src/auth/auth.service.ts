@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   ConflictException,
   UnauthorizedException,
@@ -14,6 +15,8 @@ import { UsersService } from '../users/users.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { EmailService } from '../common/services/email.service';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
 export class AuthService {
@@ -147,6 +150,72 @@ export class AuthService {
     return {
       access_token: jwt,
       user: this.sanitizeUser(user),
+    };
+  }
+
+  async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
+    const normalizedEmail = forgotPasswordDto.email.trim().toLowerCase();
+    const user = await this.usersService.findByEmail(normalizedEmail);
+
+    if (!user || user.isBlocked) {
+      return {
+        message:
+          "Agar bu email ro'yxatdan o'tgan bo'lsa, parolni tiklash havolasi yuborildi.",
+      };
+    }
+
+    user.passwordResetToken = uuidv4();
+    user.passwordResetExpiresAt = new Date(Date.now() + 1000 * 60 * 30);
+    await user.save();
+
+    try {
+      await this.emailService.sendPasswordResetEmail(
+        user.email,
+        user.passwordResetToken,
+      );
+    } catch (error) {
+      user.passwordResetToken = null;
+      user.passwordResetExpiresAt = null;
+      await user.save();
+
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new ServiceUnavailableException(
+        "Parolni tiklash emailini yuborib bo'lmadi. Keyinroq qayta urinib ko'ring.",
+      );
+    }
+
+    return {
+      message:
+        "Agar bu email ro'yxatdan o'tgan bo'lsa, parolni tiklash havolasi yuborildi.",
+    };
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const user = await this.usersService.findByPasswordResetToken(
+      resetPasswordDto.token,
+    );
+
+    if (
+      !user ||
+      !user.passwordResetExpiresAt ||
+      user.passwordResetExpiresAt.getTime() < Date.now()
+    ) {
+      throw new BadRequestException(
+        "Parolni tiklash havolasi noto'g'ri yoki muddati tugagan",
+      );
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(resetPasswordDto.password, salt);
+    user.passwordResetToken = null;
+    user.passwordResetExpiresAt = null;
+    await user.save();
+
+    return {
+      message: "Parolingiz muvaffaqiyatli yangilandi. Endi tizimga kiring.",
     };
   }
 

@@ -87,4 +87,43 @@ export class EmailService {
       "Email xizmati sozlanmagan. Tasdiqlash emailini yuborib bo'lmadi.",
     );
   }
+
+  async sendPasswordResetEmail(email: string, token: string) {
+    const resetUrl = `${this.frontendAppUrl}/login?reset_token=${token}`;
+    const mailOptions = {
+      from: `"${this.senderName}" <${this.senderEmail}>`,
+      to: email,
+      subject: 'Parolni tiklash havolasi',
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #5865f2;">Parolni tiklash</h2>
+          <p>Hisobingiz parolini yangilash uchun quyidagi tugmani bosing:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetUrl}" style="background-color: #5865f2; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Parolni yangilash</a>
+          </div>
+          <p>Yoki ushbu havolani brauzerga ko'chirib o'ting:</p>
+          <p style="word-break: break-all; font-size: 12px; color: #72767d;">${resetUrl}</p>
+          <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
+          <p style="font-size: 12px; color: #72767d;">Agar bu so'rovni siz yubormagan bo'lsangiz, ushbu xabarga e'tibor bermang.</p>
+        </div>
+      `,
+    };
+
+    if (this.transporter) {
+      try {
+        await this.transporter.sendMail(mailOptions);
+        console.log(`Password reset email sent to: ${email}`);
+        return;
+      } catch (error) {
+        console.error('Error sending password reset email:', error);
+        throw new ServiceUnavailableException(
+          "Parolni tiklash emailini yuborib bo'lmadi. Keyinroq qayta urinib ko'ring.",
+        );
+      }
+    }
+
+    throw new ServiceUnavailableException(
+      "Email xizmati sozlanmagan. Parolni tiklash emailini yuborib bo'lmadi.",
+    );
+  }
 }

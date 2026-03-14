@@ -12,6 +12,8 @@ import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import {
   AUTH_COOKIE_NAME,
@@ -113,6 +115,18 @@ export class AuthController {
         appLockSessionUnlocked: false,
       }),
     };
+  }
+
+  @Post('forgot-password')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(forgotPasswordDto);
+  }
+
+  @Post('reset-password')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
+    return this.authService.resetPassword(resetPasswordDto);
   }
 
   @UseGuards(JwtAuthGuard)
