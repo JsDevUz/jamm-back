@@ -147,6 +147,30 @@ export class PostsService {
     });
   }
 
+  private async cleanupPostImages(images?: Array<{ url?: string | null }>) {
+    const urls = Array.from(
+      new Set(
+        (images || [])
+          .map((image) => String(image?.url || '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    if (!urls.length) {
+      return;
+    }
+
+    await Promise.allSettled(
+      urls.map(async (url) => {
+        if (!this.r2Service.isManagedFile(url)) {
+          return;
+        }
+
+        await this.r2Service.deleteFile(url);
+      }),
+    );
+  }
+
   private async countUserPostComments(postId: string, userId: string) {
     return this.postCommentModel.countDocuments({
       postId: new Types.ObjectId(postId),
@@ -256,6 +280,35 @@ export class PostsService {
     };
   }
 
+  async deleteUploadedImage(userId: string, imageUrl: string) {
+    const permissions = await this.getUserPostPermissions(userId);
+    if (!permissions.canUseImages) {
+      throw new ForbiddenException(
+        'Feedga rasm qo‘shish faqat premium foydalanuvchilar uchun',
+      );
+    }
+
+    const normalizedUrl = String(imageUrl || '').trim();
+    if (!normalizedUrl) {
+      throw new BadRequestException('Rasm URL manzili topilmadi');
+    }
+
+    const objectKey = this.r2Service.getObjectKey(normalizedUrl);
+    if (!objectKey.startsWith('posts/images/')) {
+      throw new BadRequestException("Faqat gurung rasmlarini o'chirish mumkin");
+    }
+
+    if (!this.r2Service.isManagedFile(normalizedUrl)) {
+      throw new BadRequestException(
+        "Faqat boshqariladigan rasmlarni o'chirish mumkin",
+      );
+    }
+
+    await this.r2Service.deleteFile(normalizedUrl);
+
+    return { deleted: true };
+  }
+
   async createPost(userId: string, payload: UpsertPostDto) {
     const content = String(payload.content || '').trim();
     const images = this.normalizePostImages(payload.images);
@@ -333,6 +386,9 @@ export class PostsService {
       payload.images === undefined
         ? this.normalizePostImages((post.images || []) as PostImageDto[])
         : this.normalizePostImages(payload.images);
+    const previousImages = this.normalizePostImages(
+      ((post.images || []) as PostImageDto[]) || [],
+    );
 
     if (!content && !nextImages.length) {
       throw new BadRequestException(
@@ -362,6 +418,12 @@ export class PostsService {
     post.keyVersion = encrypted.keyVersion;
     post.isEncrypted = Boolean(content);
     await post.save();
+
+    const nextImageUrls = new Set(nextImages.map((image) => image.url));
+    const removedImages = previousImages.filter(
+      (image) => image.url && !nextImageUrls.has(image.url),
+    );
+    await this.cleanupPostImages(removedImages);
 
     const populated = await this.postModel
       .findById(post._id)
@@ -746,6 +808,8 @@ export class PostsService {
     post.viewsCount = 0;
     post.commentsCount = 0;
     await post.save();
+
+    await this.cleanupPostImages((post.images || []) as any[]);
 
     await Promise.all([
       this.postCommentModel.deleteMany({ postId: post._id }).exec(),

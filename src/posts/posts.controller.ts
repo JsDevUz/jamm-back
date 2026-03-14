@@ -16,7 +16,12 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PostsService } from './posts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { PostContentDto, PostReplyDto, UpsertPostDto } from './dto/post.dto';
+import {
+  DeletePostImageDto,
+  PostContentDto,
+  PostReplyDto,
+  UpsertPostDto,
+} from './dto/post.dto';
 import { UploadValidationService } from '../common/uploads/upload-validation.service';
 import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
 import { APP_LIMITS } from '../common/limits/app-limits';
@@ -47,6 +52,15 @@ export class PostsController {
     });
 
     return this.postsService.uploadImage(req.user._id.toString(), file);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('upload-image')
+  deleteUploadedImage(@Request() req, @Body() body: DeletePostImageDto) {
+    return this.postsService.deleteUploadedImage(
+      req.user._id.toString(),
+      body.url,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

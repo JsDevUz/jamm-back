@@ -40,6 +40,14 @@ export class PostImageDto {
   height?: number;
 }
 
+export class DeletePostImageDto {
+  @IsUrl(
+    { require_protocol: true },
+    { message: 'Rasm URL manzili noto‘g‘ri' },
+  )
+  url: string;
+}
+
 export class UpsertPostDto {
   @IsOptional()
   @IsString()
