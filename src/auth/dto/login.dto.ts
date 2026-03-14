@@ -2,8 +2,8 @@ import { IsEmail, IsString, Matches, MinLength } from 'class-validator';
 
 export class LoginDto {
   @IsEmail({}, { message: "Email formati noto'g'ri" })
-  @Matches(/^[^\s@]+@gmail\.com$/i, {
-    message: "Faqat gmail.com email manzili ruxsat etiladi",
+  @Matches(/^[^\s@]+@(gmail\.com|jamm\.uz)$/i, {
+    message: "Faqat gmail.com yoki jamm.uz email manzili ruxsat etiladi",
   })
   email: string;
 
