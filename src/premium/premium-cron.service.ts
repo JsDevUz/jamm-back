@@ -15,6 +15,7 @@ import {
 @Injectable()
 export class PremiumCronService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PremiumCronService.name);
+  private readonly premiumDecorationKey = 'official-badge';
   private interval: NodeJS.Timeout;
 
   constructor(
@@ -67,6 +68,14 @@ export class PremiumCronService implements OnModuleInit, OnModuleDestroy {
           premiumExpiresAt: { $lt: now },
         },
         { premiumStatus: 'expired' },
+      );
+
+      await this.userModel.updateMany(
+        {
+          premiumStatus: 'expired',
+          selectedProfileDecorationId: this.premiumDecorationKey,
+        },
+        { selectedProfileDecorationId: null },
       );
 
       this.logger.log(

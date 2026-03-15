@@ -17,6 +17,9 @@ export class PromoCode {
   @Prop({ required: true })
   validUntil: Date;
 
+  @Prop({ type: Number, required: true, default: 30 })
+  durationInDays: number;
+
   @Prop({ default: true })
   isActive: boolean;
 

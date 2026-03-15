@@ -22,6 +22,12 @@ export class CreatePromoCodeDto {
   @IsDateString()
   validUntil: string;
 
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  durationInDays: number;
+
   @IsOptional()
   @Transform(({ value }) =>
     value === '' || value === null || value === undefined ? null : Number(value),

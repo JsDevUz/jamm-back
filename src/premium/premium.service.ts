@@ -27,6 +27,7 @@ import { ChatsService } from '../chats/chats.service';
 export class PremiumService {
   private readonly logger = new Logger(PremiumService.name);
   private readonly PREMIUM_CACHE_PREFIX = 'premium_status:';
+  private readonly premiumDecorationKey = 'official-badge';
   private readonly uzbekUtcMonths = [
     'Yanvar',
     'Fevral',
@@ -151,6 +152,7 @@ export class PremiumService {
     code: string;
     validFrom: Date;
     validUntil: Date;
+    durationInDays: number;
     maxUses?: number | null;
     isActive?: boolean;
   }) {
@@ -175,6 +177,7 @@ export class PremiumService {
       code: hashedCode,
       validFrom: payload.validFrom,
       validUntil: payload.validUntil,
+      durationInDays: payload.durationInDays,
       isActive: payload.isActive ?? true,
       ...(payload.maxUses === undefined || payload.maxUses === null
         ? {}
@@ -229,14 +232,15 @@ export class PremiumService {
       throw new BadRequestException('Afsuski, promo-kod hozirgina tugadi');
     }
 
-    // Activate Premium for 30 days
+    // Activate Premium for the promo's configured duration
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
+    expiresAt.setDate(expiresAt.getDate() + (promo.durationInDays || 30));
 
     await this.userModel.findByIdAndUpdate(userId, {
       premiumStatus: 'active',
       premiumExpiresAt: expiresAt,
       hasUsedPromo: true,
+      selectedProfileDecorationId: this.premiumDecorationKey,
     });
 
     // Record Subscription
@@ -290,9 +294,17 @@ export class PremiumService {
 
     if (user.premiumStatus === 'active') {
       // Handle auto-expiration if not done by cron yet
-      await this.userModel.findByIdAndUpdate(userId, {
-        premiumStatus: 'expired',
-      });
+      await this.userModel.findByIdAndUpdate(
+        userId,
+        user.selectedProfileDecorationId === this.premiumDecorationKey
+          ? {
+              premiumStatus: 'expired',
+              selectedProfileDecorationId: null,
+            }
+          : {
+              premiumStatus: 'expired',
+            },
+      );
     }
 
     await redis.set(

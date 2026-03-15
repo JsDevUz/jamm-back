@@ -214,6 +214,7 @@ export class AdminService {
       code: dto.code,
       validFrom: new Date(dto.validFrom),
       validUntil: new Date(dto.validUntil),
+      durationInDays: dto.durationInDays,
       maxUses: dto.maxUses ?? null,
       isActive: dto.isActive,
     });

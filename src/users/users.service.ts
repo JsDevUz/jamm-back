@@ -26,6 +26,7 @@ import { AppSettingsService } from '../app-settings/app-settings.service';
 
 @Injectable()
 export class UsersService {
+  private readonly premiumDecorationKey = 'official-badge';
   private readonly appLockKeyLength = 64;
   private readonly defaultProfileDecorations = [
     {
@@ -141,7 +142,7 @@ export class UsersService {
       throw new BadRequestException('Foydalanuvchi topilmadi');
     }
 
-    if (decorationId === 'premium-badge') {
+    if (decorationId === this.premiumDecorationKey) {
       if (user.premiumStatus !== 'active') {
         throw new ForbiddenException(
           'Bu profil dekoratsiyasi faqat premium obunachilar uchun',
@@ -151,7 +152,7 @@ export class UsersService {
       return this.userModel
         .findByIdAndUpdate(
           userId,
-          { $set: { selectedProfileDecorationId: 'premium-badge' } },
+          { $set: { selectedProfileDecorationId: this.premiumDecorationKey } },
           { new: true },
         )
         .select('-password')
