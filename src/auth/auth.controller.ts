@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
+import { randomUUID } from 'crypto';
 import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
@@ -36,6 +37,35 @@ export class AuthController {
     private appSettingsService: AppSettingsService,
     private jwtService: JwtService,
   ) {}
+
+  private buildGoogleRedirectUri(request: ExpressRequest) {
+    const configured =
+      this.configService.get<string>('GOOGLE_REDIRECT_URI') || '';
+    if (configured.trim()) {
+      return configured.trim();
+    }
+
+    const protocol =
+      (request.headers['x-forwarded-proto'] as string) ||
+      request.protocol ||
+      'http';
+    const host = request.get('host') || 'localhost:3000';
+    return `${protocol}://${host}/auth/google/callback`;
+  }
+
+  private buildFrontendRedirectUrl(path: string) {
+    const configured =
+      this.configService.get<string>('FRONTEND_APP_URL') ||
+      this.configService.get<string>('APP_CLIENT_URL') ||
+      '';
+
+    const base = configured.trim().replace(/\/+$/, '');
+    if (base) {
+      return `${base}${path}`;
+    }
+
+    return path;
+  }
 
   private isAppUnlocked(request: ExpressRequest, user: any) {
     if (!user?.appLockEnabled) {
@@ -127,6 +157,91 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.resetPassword(resetPasswordDto);
+  }
+
+  @Get('google/start')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  googleStart(@Request() req, @Res() res: Response) {
+    const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID') || '';
+    if (!clientId) {
+      return res.redirect(
+        this.buildFrontendRedirectUrl(
+          `/login?google_error=${encodeURIComponent('Google auth hali sozlanmagan')}`,
+        ),
+      );
+    }
+
+    const state = randomUUID();
+    const redirectUri = this.buildGoogleRedirectUri(req);
+
+    res.cookie('jamm_google_oauth_state', state, {
+      httpOnly: true,
+      secure:
+        this.configService.get<string>('NODE_ENV') === 'production' ||
+        this.configService.get<string>('AUTH_COOKIE_SECURE') === 'true',
+      sameSite: 'lax',
+      maxAge: 10 * 60 * 1000,
+      path: '/',
+    });
+
+    const googleUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    googleUrl.searchParams.set('client_id', clientId);
+    googleUrl.searchParams.set('redirect_uri', redirectUri);
+    googleUrl.searchParams.set('response_type', 'code');
+    googleUrl.searchParams.set('scope', 'openid email profile');
+    googleUrl.searchParams.set('prompt', 'select_account');
+    googleUrl.searchParams.set('state', state);
+
+    return res.redirect(googleUrl.toString());
+  }
+
+  @Get('google/callback')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async googleCallback(@Request() req, @Res() res: Response) {
+    const redirectUri = this.buildGoogleRedirectUri(req);
+    const frontendError = (message: string) =>
+      this.buildFrontendRedirectUrl(
+        `/login?google_error=${encodeURIComponent(message)}`,
+      );
+
+    try {
+      const stateCookie = extractCookieValue(
+        req?.headers?.cookie || '',
+        'jamm_google_oauth_state',
+      );
+      const stateParam = String(req.query?.state || '');
+      const code = String(req.query?.code || '');
+
+      res.clearCookie('jamm_google_oauth_state', {
+        path: '/',
+      });
+
+      if (!code) {
+        return res.redirect(frontendError('Google auth kodi kelmadi'));
+      }
+
+      if (!stateCookie || !stateParam || stateCookie !== stateParam) {
+        return res.redirect(frontendError('Google auth state mos kelmadi'));
+      }
+
+      const data = await this.authService.loginWithGoogleCode(code, redirectUri);
+
+      res.cookie(
+        AUTH_COOKIE_NAME,
+        data.access_token,
+        buildAuthCookieOptions(this.configService),
+      );
+      res.clearCookie(
+        APP_UNLOCK_COOKIE_NAME,
+        buildAppUnlockCookieOptions(this.configService),
+      );
+
+      return res.redirect(this.buildFrontendRedirectUrl('/chats'));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Google auth xatosi';
+      return res.redirect(frontendError(message));
+    }
   }
 
   @UseGuards(JwtAuthGuard)

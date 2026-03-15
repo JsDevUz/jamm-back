@@ -9,6 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { UsersService } from '../users/users.service';
@@ -24,7 +25,27 @@ export class AuthService {
     private usersService: UsersService,
     private jwtService: JwtService,
     private emailService: EmailService,
+    private configService: ConfigService,
   ) {}
+
+  private isAllowedAuthEmail(email: string) {
+    return /^[^\s@]+@(gmail\.com|jamm\.uz)$/i.test(String(email || '').trim());
+  }
+
+  private normalizeGoogleNickname(name?: string | null, email?: string | null) {
+    const trimmedName = String(name || '').trim();
+    if (trimmedName) {
+      return trimmedName.slice(0, 60);
+    }
+
+    const emailPrefix = String(email || '')
+      .trim()
+      .split('@')[0]
+      .replace(/[._-]+/g, ' ')
+      .trim();
+
+    return emailPrefix || "Do'st";
+  }
 
   async signup(signupDto: SignupDto) {
     const normalizedEmail = signupDto.email.trim().toLowerCase();
@@ -118,6 +139,140 @@ export class AuthService {
     // Generate JWT
     const token = this.generateToken(user._id.toString(), user.email);
 
+    return {
+      access_token: token,
+      user: this.sanitizeUser(user),
+    };
+  }
+
+  async loginWithGoogleCode(code: string, redirectUri: string) {
+    const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID') || '';
+    const clientSecret =
+      this.configService.get<string>('GOOGLE_CLIENT_SECRET') || '';
+
+    if (!clientId || !clientSecret) {
+      throw new ServiceUnavailableException(
+        'Google auth hali sozlanmagan',
+      );
+    }
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = (await tokenResponse.json()) as {
+      id_token?: string;
+      error?: string;
+      error_description?: string;
+    };
+
+    if (!tokenResponse.ok || !tokenData?.id_token) {
+      throw new UnauthorizedException(
+        tokenData?.error_description || 'Google auth tokenini olib bo‘lmadi',
+      );
+    }
+
+    const verifyResponse = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokenData.id_token)}`,
+    );
+    const googleProfile = (await verifyResponse.json()) as {
+      aud?: string;
+      email?: string;
+      email_verified?: string | boolean;
+      name?: string;
+      picture?: string;
+    };
+
+    if (!verifyResponse.ok) {
+      throw new UnauthorizedException("Google tokenini tekshirib bo'lmadi");
+    }
+
+    if (googleProfile.aud !== clientId) {
+      throw new UnauthorizedException("Google token mos kelmadi");
+    }
+
+    const normalizedEmail = String(googleProfile.email || '')
+      .trim()
+      .toLowerCase();
+
+    if (!normalizedEmail) {
+      throw new UnauthorizedException('Google akkaunt email bermadi');
+    }
+
+    const isVerified =
+      googleProfile.email_verified === true ||
+      googleProfile.email_verified === 'true';
+
+    if (!isVerified) {
+      throw new UnauthorizedException('Google email tasdiqlanmagan');
+    }
+
+    if (!this.isAllowedAuthEmail(normalizedEmail)) {
+      throw new UnauthorizedException(
+        'Faqat gmail.com yoki jamm.uz email manzili ruxsat etiladi',
+      );
+    }
+
+    let user = await this.usersService.findByEmail(normalizedEmail);
+
+    if (!user) {
+      const randomPassword = await bcrypt.hash(uuidv4(), 10);
+      user = await this.usersService.create({
+        email: normalizedEmail,
+        password: randomPassword,
+        nickname: this.normalizeGoogleNickname(
+          googleProfile.name,
+          normalizedEmail,
+        ),
+        isVerified: true,
+        phone: '',
+        username: undefined,
+        ...(googleProfile.picture ? { avatar: googleProfile.picture } : {}),
+      });
+    } else {
+      if (user.isBlocked) {
+        throw new HttpException(
+          "Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.",
+          HttpStatus.LOCKED,
+        );
+      }
+
+      let shouldSave = false;
+      if (user.isVerified === false) {
+        user.isVerified = true;
+        user.verificationToken = null;
+        shouldSave = true;
+      }
+
+      if (!String(user.nickname || '').trim()) {
+        user.nickname = this.normalizeGoogleNickname(
+          googleProfile.name,
+          normalizedEmail,
+        );
+        shouldSave = true;
+      }
+
+      if (!String(user.avatar || '').trim() && googleProfile.picture) {
+        user.avatar = googleProfile.picture;
+        shouldSave = true;
+      }
+
+      if (shouldSave) {
+        await user.save();
+      }
+    }
+
+    const token = this.generateToken(user._id.toString(), user.email);
     return {
       access_token: token,
       user: this.sanitizeUser(user),
