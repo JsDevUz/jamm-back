@@ -2,7 +2,6 @@ import {
   Injectable,
   Inject,
   forwardRef,
-  ForbiddenException,
   NotFoundException,
   BadRequestException,
   Logger,
@@ -70,14 +69,23 @@ export class PremiumService {
 
   private async sendPremiumActivatedMessage(userId: string, expiresAt: Date) {
     try {
-      const jammUser = await this.userModel
-        .findOne({ username: 'jamm' }, { _id: 1 })
+      const messengerUser = await this.userModel
+        .findOne(
+          { username: { $in: ['premium', 'jamm'] } },
+          { _id: 1, username: 1 },
+        )
+        .sort({ username: -1 })
         .exec();
 
-      if (!jammUser) return;
+      if (!messengerUser) {
+        this.logger.warn(
+          'Premium activation messenger user not found (@premium or @jamm)',
+        );
+        return;
+      }
 
-      const jammId = jammUser._id.toString();
-      const chat = await this.chatsService.createChat(jammId, {
+      const messengerId = messengerUser._id.toString();
+      const chat = await this.chatsService.createChat(messengerId, {
         isGroup: false,
         memberIds: [userId],
       });
@@ -85,7 +93,7 @@ export class PremiumService {
       const formattedExpiresAt = this.formatUtcDateForMessage(expiresAt);
       await this.chatsService.sendMessage(
         chat._id.toString(),
-        jammId,
+        messengerId,
         `Jamm Premium sotib olganingiz uchun sizga raxmat. Premium obunangiz ${formattedExpiresAt} da yakuniga yetadi.`,
       );
     } catch (error) {

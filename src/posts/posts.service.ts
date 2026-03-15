@@ -219,8 +219,13 @@ export class PostsService {
             jammId: obj.author.jammId,
             username: obj.author.username,
             nickname: obj.author.nickname,
+            name: obj.author.name,
             avatar: obj.author.avatar,
             premiumStatus: obj.author.premiumStatus,
+            selectedProfileDecorationId:
+              obj.author.selectedProfileDecorationId || null,
+            customProfileDecorationImage:
+              obj.author.customProfileDecorationImage || null,
           }
         : obj.author,
       content: obj.isEncrypted
