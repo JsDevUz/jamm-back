@@ -27,15 +27,32 @@ import { AppSettingsService } from '../app-settings/app-settings.service';
 @Injectable()
 export class UsersService {
   private readonly premiumDecorationKey = 'official-badge';
+  private readonly premiumPinkDecorationKey = 'premium-badge';
   private readonly appLockKeyLength = 64;
   private readonly defaultProfileDecorations = [
+    {
+      key: 'official-badge',
+      label: 'Official Badge',
+      emoji: '✔️',
+      animation: 'sparkle',
+      premiumOnly: true,
+      sortOrder: 1,
+    },
+    {
+      key: 'premium-badge',
+      label: 'Premium Badge',
+      emoji: '💗',
+      animation: 'sparkle',
+      premiumOnly: true,
+      sortOrder: 2,
+    },
     {
       key: 'sparkle-gold',
       label: 'Golden Spark',
       emoji: '✨',
       animation: 'sparkle',
       premiumOnly: true,
-      sortOrder: 1,
+      sortOrder: 3,
     },
     {
       key: 'fire-pop',
@@ -43,7 +60,7 @@ export class UsersService {
       emoji: '🔥',
       animation: 'pulse',
       premiumOnly: true,
-      sortOrder: 2,
+      sortOrder: 4,
     },
     {
       key: 'rocket-wave',
@@ -51,7 +68,7 @@ export class UsersService {
       emoji: '🚀',
       animation: 'float',
       premiumOnly: true,
-      sortOrder: 3,
+      sortOrder: 5,
     },
     {
       key: 'diamond-spin',
@@ -59,7 +76,7 @@ export class UsersService {
       emoji: '💎',
       animation: 'spin',
       premiumOnly: true,
-      sortOrder: 4,
+      sortOrder: 6,
     },
     {
       key: 'star-wiggle',
@@ -67,7 +84,7 @@ export class UsersService {
       emoji: '🌟',
       animation: 'wiggle',
       premiumOnly: true,
-      sortOrder: 5,
+      sortOrder: 7,
     },
     {
       key: 'heart-float',
@@ -75,7 +92,7 @@ export class UsersService {
       emoji: '💖',
       animation: 'float',
       premiumOnly: true,
-      sortOrder: 6,
+      sortOrder: 8,
     },
   ];
 
@@ -142,7 +159,10 @@ export class UsersService {
       throw new BadRequestException('Foydalanuvchi topilmadi');
     }
 
-    if (decorationId === this.premiumDecorationKey) {
+    if (
+      decorationId === this.premiumDecorationKey ||
+      decorationId === this.premiumPinkDecorationKey
+    ) {
       if (user.premiumStatus !== 'active') {
         throw new ForbiddenException(
           'Bu profil dekoratsiyasi faqat premium obunachilar uchun',
@@ -152,7 +172,7 @@ export class UsersService {
       return this.userModel
         .findByIdAndUpdate(
           userId,
-          { $set: { selectedProfileDecorationId: this.premiumDecorationKey } },
+          { $set: { selectedProfileDecorationId: decorationId } },
           { new: true },
         )
         .select('-password')
