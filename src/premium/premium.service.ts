@@ -27,7 +27,7 @@ import { ChatsService } from '../chats/chats.service';
 export class PremiumService {
   private readonly logger = new Logger(PremiumService.name);
   private readonly PREMIUM_CACHE_PREFIX = 'premium_status:';
-  private readonly premiumDecorationKey = 'official-badge';
+  private readonly premiumDecorationKey = 'premium-badge';
   private readonly uzbekUtcMonths = [
     'Yanvar',
     'Fevral',

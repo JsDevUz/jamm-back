@@ -15,7 +15,7 @@ import {
 @Injectable()
 export class PremiumCronService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PremiumCronService.name);
-  private readonly premiumDecorationKey = 'official-badge';
+  private readonly premiumDecorationKey = 'premium-badge';
   private interval: NodeJS.Timeout;
 
   constructor(
