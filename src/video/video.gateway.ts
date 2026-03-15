@@ -21,6 +21,7 @@ import { verifySocketToken } from '../common/auth/ws-auth.util';
 import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 
 interface KnockEntry {
+  peerKey: string;
   displayName: string;
   socket: Socket;
 }
@@ -108,6 +109,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
   }
 
+  private getPeerKey(client: Socket): string {
+    return String(client.data?.user?._id || client.id);
+  }
+
   async handleConnection(client: Socket) {
     try {
       const payload = await verifySocketToken(
@@ -136,12 +141,17 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.to(roomId).emit('peer-left', { peerId: client.id });
         if (room.peers.size === 0) this.rooms.delete(roomId);
       }
-      if (room.knockQueue.has(client.id)) {
-        room.knockQueue.delete(client.id);
+      const knockEntries = Array.from(room.knockQueue.entries());
+      const matchingKnockEntry = knockEntries.find(
+        ([, entry]) => entry.socket.id === client.id,
+      );
+
+      if (matchingKnockEntry) {
+        room.knockQueue.delete(matchingKnockEntry[0]);
         if (room.creatorSocketId === client.id) {
-          room.knockQueue.forEach((entry, sid) => {
+          room.knockQueue.forEach((entry) => {
             this.server
-              .to(sid)
+              .to(entry.socket.id)
               .emit('knock-rejected', { reason: 'Creator left' });
           });
           room.knockQueue.clear();
@@ -182,9 +192,40 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    if (this.rooms.has(roomId)) {
-      client.emit('error', {
-        message: 'Bu room allaqachon mavjud. Yangisini yarating.',
+    const existingRoom = this.rooms.get(roomId);
+    if (existingRoom) {
+      if (existingRoom.creatorUserId !== userId) {
+        client.emit('error', {
+          message: 'Bu room allaqachon mavjud. Yangisini yarating.',
+        });
+        return;
+      }
+
+      const previousCreatorSocketId = existingRoom.creatorSocketId;
+      if (
+        previousCreatorSocketId &&
+        previousCreatorSocketId !== client.id &&
+        existingRoom.peers.has(previousCreatorSocketId)
+      ) {
+        existingRoom.peers.delete(previousCreatorSocketId);
+        client.to(roomId).emit('peer-left', { peerId: previousCreatorSocketId });
+        const previousCreatorSocket = this.server.sockets.sockets.get(
+          previousCreatorSocketId,
+        );
+        previousCreatorSocket?.leave(roomId);
+      }
+
+      existingRoom.creatorSocketId = client.id;
+      this.admitPeer(client, roomId, displayName, existingRoom);
+      client.emit('room-created', {
+        roomId,
+        isPrivate: existingRoom.isPrivate,
+        title: existingRoom.title,
+        reconnected: true,
+      });
+      client.emit('room-info', {
+        title: existingRoom.title,
+        isPrivate: existingRoom.isPrivate,
       });
       return;
     }
@@ -247,6 +288,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
     const displayName = this.sanitizeDisplayName(data?.displayName);
     const room = this.rooms.get(roomId);
+    const peerKey = this.getPeerKey(client);
 
     if (!room) {
       client.emit('error', { message: 'Room not found' });
@@ -269,7 +311,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     if (room.isPrivate) {
-      if (room.knockQueue.has(client.id)) {
+      if (room.knockQueue.has(peerKey)) {
+        const existingEntry = room.knockQueue.get(peerKey);
+        if (existingEntry) {
+          existingEntry.socket = client;
+          existingEntry.displayName = displayName;
+        }
         client.emit('waiting-for-approval');
         client.emit('room-info', {
           title: room.title,
@@ -278,9 +325,13 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      room.knockQueue.set(client.id, { displayName, socket: client });
+      room.knockQueue.set(peerKey, {
+        peerKey,
+        displayName,
+        socket: client,
+      });
       this.server.to(room.creatorSocketId).emit('knock-request', {
-        peerId: client.id,
+        peerId: peerKey,
         displayName,
       });
       client.emit('waiting-for-approval');
@@ -345,7 +396,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!entry) return;
 
     if (room.peers.size >= room.participantLimit) {
-      this.server.to(peerId).emit('knock-rejected', {
+      this.server.to(entry.socket.id).emit('knock-rejected', {
         reason: 'Room to‘lib bo‘lgan',
       });
       room.knockQueue.delete(peerId);
@@ -354,10 +405,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     room.knockQueue.delete(peerId);
 
-    // Notify the guest they're approved (with media locked for private rooms)
+    // Notify the guest they're approved. Mic/cam are allowed by default.
     this.server
-      .to(peerId)
-      .emit('knock-approved', { roomId, title: room.title, mediaLocked: true });
+      .to(entry.socket.id)
+      .emit('knock-approved', { roomId, title: room.title, mediaLocked: false });
 
     // Admit them using the stored socket reference
     this.admitPeer(entry.socket, roomId, entry.displayName, room);
@@ -373,9 +424,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = this.rooms.get(roomId);
     if (!room || room.creatorSocketId !== client.id) return;
 
+    const entry = room.knockQueue.get(peerId);
+    if (!entry) return;
+
     room.knockQueue.delete(peerId);
     this.server
-      .to(peerId)
+      .to(entry.socket.id)
       .emit('knock-rejected', { reason: 'Creator rad etdi' });
   }
 
@@ -395,7 +449,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!room.isPrivate && room.knockQueue.size > 0) {
       for (const [peerId, entry] of Array.from(room.knockQueue.entries())) {
         if (room.peers.size >= room.participantLimit) {
-          this.server.to(peerId).emit('knock-rejected', {
+          this.server.to(entry.socket.id).emit('knock-rejected', {
             reason: 'Room to‘lib bo‘lgan',
           });
           room.knockQueue.delete(peerId);
@@ -403,13 +457,13 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
 
         room.knockQueue.delete(peerId);
-        this.server.to(peerId).emit('knock-approved', {
+        this.server.to(entry.socket.id).emit('knock-approved', {
           roomId,
           title: room.title,
           mediaLocked: false,
         });
         this.admitPeer(entry.socket, roomId, entry.displayName, room);
-        this.server.to(peerId).emit('room-info', {
+        this.server.to(entry.socket.id).emit('room-info', {
           title: room.title,
           isPrivate: room.isPrivate,
         });
