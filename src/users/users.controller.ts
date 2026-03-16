@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Patch,
   Body,
@@ -130,6 +131,36 @@ export class UsersController {
   async getMe(@Request() req) {
     const user = await this.usersService.findById(req.user._id.toString());
     return this.sanitizeUser(user);
+  }
+
+  @Post('me/push-token')
+  async registerPushToken(
+    @Request() req,
+    @Body() body: { token: string; platform?: string; deviceId?: string | null },
+  ) {
+    return this.usersService.registerPushToken(req.user._id.toString(), body);
+  }
+
+  @Post('me/push-token/remove')
+  async removePushTokenLegacy(
+    @Request() req,
+    @Body() body: { token?: string | null },
+  ) {
+    return this.usersService.removePushToken(
+      req.user._id.toString(),
+      body?.token ?? null,
+    );
+  }
+
+  @Delete('me/push-token')
+  async removePushToken(
+    @Request() req,
+    @Body() body: { token?: string | null },
+  ) {
+    return this.usersService.removePushToken(
+      req.user._id.toString(),
+      body?.token ?? null,
+    );
   }
 
   @Get('me/app-lock')

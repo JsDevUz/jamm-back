@@ -122,6 +122,7 @@ export class AuthController {
         ...data.user,
         appLockSessionUnlocked: false,
       }),
+      access_token: data.access_token,
     };
   }
 
@@ -144,6 +145,7 @@ export class AuthController {
         ...data.user,
         appLockSessionUnlocked: false,
       }),
+      access_token: data.access_token,
     };
   }
 

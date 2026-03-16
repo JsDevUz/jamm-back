@@ -32,6 +32,7 @@ import {
   getTierLimit,
 } from '../common/limits/app-limits';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import { ExpoPushService } from '../common/services/expo-push.service';
 import {
   generatePrefixedShortSlug,
   isPrefixedShortSlug,
@@ -48,6 +49,7 @@ export class ChatsService implements OnModuleInit {
     private encryptionService: EncryptionService,
     private premiumService: PremiumService,
     private appSettingsService: AppSettingsService,
+    private expoPushService: ExpoPushService,
   ) {}
 
   async onModuleInit() {
@@ -1068,6 +1070,44 @@ export class ChatsService implements OnModuleInit {
     }
 
     this.chatsGateway.server.to(rooms).emit('message_new', decryptedMessage);
+
+    const senderId = userId;
+    const senderName =
+      decryptedMessage.senderId?.nickname ||
+      decryptedMessage.senderId?.username ||
+      'Yangi xabar';
+    const pushTargets = (chat?.members || [])
+      .map((member: any) => {
+        const memberId = member?._id ? member._id.toString() : member.toString();
+        return memberId === senderId ? null : memberId;
+      })
+      .filter(Boolean) as string[];
+
+    if (pushTargets.length) {
+      const targetUsers = await this.userModel
+        .find({ _id: { $in: pushTargets } })
+        .select('pushTokens')
+        .lean()
+        .exec();
+
+      const notifications = targetUsers.flatMap((targetUser: any) =>
+        (targetUser.pushTokens || []).map((entry: any) => ({
+          to: entry?.token,
+          title: senderName,
+          body: chat?.isGroup
+            ? `${chat.name || 'Guruh'}: ${decryptedMessage.content || 'Yangi xabar'}`
+            : decryptedMessage.content || 'Yangi xabar',
+          sound: 'default' as const,
+          data: {
+            type: 'chat_message',
+            chatId: chatId,
+            isGroup: Boolean(chat?.isGroup),
+          },
+        })),
+      );
+
+      void this.expoPushService.send(notifications);
+    }
 
     return decryptedMessage;
   }

@@ -302,6 +302,54 @@ export class UsersService {
     return this.userModel.findById(id).exec();
   }
 
+  async registerPushToken(
+    userId: string,
+    payload: { token: string; platform?: string; deviceId?: string | null },
+  ) {
+    const token = String(payload.token || '').trim();
+    if (!token) {
+      throw new BadRequestException('Push token topilmadi');
+    }
+
+    await this.userModel.updateOne(
+      { _id: userId },
+      {
+        $pull: { pushTokens: { token } },
+      },
+    );
+
+    await this.userModel.updateOne(
+      { _id: userId },
+      {
+        $push: {
+          pushTokens: {
+            token,
+            platform: payload.platform || null,
+            deviceId: payload.deviceId || null,
+            updatedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    return { success: true };
+  }
+
+  async removePushToken(userId: string, token?: string | null) {
+    const normalizedToken = String(token || '').trim();
+
+    if (normalizedToken) {
+      await this.userModel.updateOne(
+        { _id: userId },
+        { $pull: { pushTokens: { token: normalizedToken } } },
+      );
+      return { success: true };
+    }
+
+    await this.userModel.updateOne({ _id: userId }, { $set: { pushTokens: [] } });
+    return { success: true };
+  }
+
   private hashAppLockPin(pin: string, salt = randomBytes(16).toString('hex')) {
     const derivedKey = scryptSync(pin, salt, this.appLockKeyLength).toString(
       'hex',

@@ -14,6 +14,7 @@ import { EncryptionModule } from '../common/encryption/encryption.module';
 import { PremiumModule } from '../premium/premium.module';
 import { AppSettingsModule } from '../app-settings/app-settings.module';
 import { getJwtSecret } from '../auth/auth-cookie.util';
+import { ExpoPushService } from '../common/services/expo-push.service';
 
 @Module({
   imports: [
@@ -35,7 +36,7 @@ import { getJwtSecret } from '../auth/auth-cookie.util';
     forwardRef(() => PremiumModule),
     AppSettingsModule,
   ],
-  providers: [ChatsService, ChatsGateway, R2Service],
+  providers: [ChatsService, ChatsGateway, R2Service, ExpoPushService],
   controllers: [ChatsController],
   exports: [ChatsService],
 })

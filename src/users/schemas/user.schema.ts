@@ -100,6 +100,24 @@ export class User {
 
   @Prop({ default: false })
   isBlocked: boolean;
+
+  @Prop({
+    type: [
+      {
+        token: { type: String, required: true },
+        platform: { type: String, default: null },
+        deviceId: { type: String, default: null },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
+    default: [],
+  })
+  pushTokens: Array<{
+    token: string;
+    platform?: string | null;
+    deviceId?: string | null;
+    updatedAt?: Date;
+  }>;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
