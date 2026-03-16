@@ -256,6 +256,24 @@ export class AuthController {
     });
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('mobile-session')
+  async getMobileSession(@Request() req) {
+    const { password, __v, ...user } = req.user.toObject();
+    const accessToken = this.jwtService.sign({
+      sub: String(user._id),
+      email: user.email,
+    });
+
+    return {
+      user: await this.appSettingsService.decorateUserPayload({
+        ...user,
+        appLockSessionUnlocked: this.isAppUnlocked(req, user),
+      }),
+      access_token: accessToken,
+    };
+  }
+
   @Post('logout')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async logout(@Res({ passthrough: true }) res: Response) {
