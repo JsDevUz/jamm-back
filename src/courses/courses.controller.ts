@@ -1046,7 +1046,6 @@ export class CoursesController {
     @Param('id') id: string,
     @Param('lessonId') lessonId: string,
     @Headers('user-agent') userAgent: string,
-    @Res({ passthrough: true }) res: Response,
     @Query('mediaId') mediaId?: string,
     @Query('client') client?: string,
   ) {
@@ -1071,18 +1070,6 @@ export class CoursesController {
       },
       { expiresIn: '2h' },
     );
-
-    const isProd = process.env.NODE_ENV === 'production';
-    const isMobileNativeClient = client === 'mobile-native';
-    if (!isMobileNativeClient) {
-      res.cookie(this.getPlaybackCookieName(), token, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: isProd,
-        maxAge: 1000 * 60 * 60 * 2,
-        path: `/courses/${id}/lessons/${lessonId}`,
-      });
-    }
 
     const isHlsLesson =
       media.streamType === 'hls' || media.videoUrl?.endsWith('.m3u8');

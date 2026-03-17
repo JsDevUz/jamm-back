@@ -5,6 +5,7 @@ import {
   MaxLength,
   Matches,
 } from 'class-validator';
+import { APP_TEXT_LIMITS } from '../../common/limits/app-limits';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -12,7 +13,7 @@ export class UpdateProfileDto {
   @MinLength(3, {
     message: "Nickname kamida 3 ta belgidan iborat bo'lishi kerak",
   })
-  @MaxLength(30, {
+  @MaxLength(APP_TEXT_LIMITS.nicknameChars, {
     message: "Nickname ko'pi bilan 30 ta belgidan iborat bo'lishi kerak",
   })
   nickname?: string;
@@ -40,8 +41,8 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(30, {
-    message: "Haqida (Bio) ko'pi bilan 30 ta belgidan iborat bo'lishi kerak",
+  @MaxLength(APP_TEXT_LIMITS.bioChars, {
+    message: `Haqida (Bio) ko'pi bilan ${APP_TEXT_LIMITS.bioChars} ta belgidan iborat bo'lishi kerak`,
   })
   bio?: string;
 }
