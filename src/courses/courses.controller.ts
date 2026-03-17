@@ -380,7 +380,7 @@ export class CoursesController {
       ...base,
       'Content-Disposition': 'inline',
       'X-Content-Type-Options': 'nosniff',
-      'Cross-Origin-Resource-Policy': 'same-site',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
     };
 
     if (cacheStrategy === 'static') {
