@@ -107,6 +107,25 @@ export class CoursesController {
     return query ? `${baseUrl}?${query}` : baseUrl;
   }
 
+  private buildProtectedLessonHlsAssetUrl(
+    courseId: string,
+    lessonId: string,
+    asset: string,
+    playbackToken?: string,
+    mediaId?: string,
+  ) {
+    const baseUrl = `/courses/${courseId}/lessons/${lessonId}/hls/${encodeURIComponent(asset)}`;
+    const params = new URLSearchParams();
+    if (playbackToken) {
+      params.set('playbackToken', playbackToken);
+    }
+    if (mediaId) {
+      params.set('mediaId', mediaId);
+    }
+    const query = params.toString();
+    return query ? `${baseUrl}?${query}` : baseUrl;
+  }
+
   private buildProtectedHomeworkHlsKeyUrl(
     courseId: string,
     lessonId: string,
@@ -119,10 +138,24 @@ export class CoursesController {
     return `${baseUrl}?playbackToken=${encodeURIComponent(playbackToken)}`;
   }
 
+  private buildProtectedHomeworkHlsAssetUrl(
+    courseId: string,
+    lessonId: string,
+    assignmentId: string,
+    submissionUserId: string,
+    asset: string,
+    playbackToken?: string,
+  ) {
+    const baseUrl = `/courses/${courseId}/lessons/${lessonId}/homework/${assignmentId}/submissions/${submissionUserId}/hls/${encodeURIComponent(asset)}`;
+    if (!playbackToken) return baseUrl;
+    return `${baseUrl}?playbackToken=${encodeURIComponent(playbackToken)}`;
+  }
+
   private rewriteHybridManifestContent(
     manifest: string,
     manifestKey: string,
     keyUrl: string,
+    rewritePlaylistUrl?: (assetName: string) => string,
   ) {
     return String(manifest || '')
       .split(/\r?\n/)
@@ -146,6 +179,10 @@ export class CoursesController {
 
         if (/^https?:\/\//i.test(trimmed)) {
           return trimmed;
+        }
+
+        if (trimmed.endsWith('.m3u8') && rewritePlaylistUrl) {
+          return rewritePlaylistUrl(this.getAssetFileName(trimmed));
         }
 
         if (trimmed.endsWith('.ts') || trimmed.endsWith('.m4s')) {
@@ -177,7 +214,19 @@ export class CoursesController {
       mediaId,
     );
     const manifestKey = this.r2Service.getObjectKey(mediaItem.videoUrl || '');
-    return this.rewriteHybridManifestContent(manifest, manifestKey, keyUrl);
+    return this.rewriteHybridManifestContent(
+      manifest,
+      manifestKey,
+      keyUrl,
+      (assetName: string) =>
+        this.buildProtectedLessonHlsAssetUrl(
+          courseId,
+          lessonId,
+          assetName,
+          playbackToken,
+          mediaId,
+        ),
+    );
   }
 
   private getManifestDurationSeconds(manifestContent: string) {
@@ -485,15 +534,16 @@ export class CoursesController {
     if (cookieToken) {
       try {
         const payload = await this.jwtService.verifyAsync(cookieToken);
-        const expectedUaHash = this.buildUserAgentHash(
-          req.headers['user-agent'],
-        );
+        const isMobilePlayback = payload?.client === 'mobile-native';
+        const expectedUaHash = isMobilePlayback
+          ? null
+          : this.buildUserAgentHash(req.headers['user-agent']);
 
         if (
           payload?.type !== 'course-playback' ||
           payload?.courseId !== courseId ||
           payload?.lessonId !== lessonId ||
-          payload?.uaHash !== expectedUaHash
+          (!isMobilePlayback && payload?.uaHash !== expectedUaHash)
         ) {
           throw new UnauthorizedException('Invalid playback token');
         }
@@ -537,9 +587,10 @@ export class CoursesController {
     if (cookieToken) {
       try {
         const payload = await this.jwtService.verifyAsync(cookieToken);
-        const expectedUaHash = this.buildUserAgentHash(
-          req.headers['user-agent'],
-        );
+        const isMobilePlayback = payload?.client === 'mobile-native';
+        const expectedUaHash = isMobilePlayback
+          ? null
+          : this.buildUserAgentHash(req.headers['user-agent']);
 
         if (
           payload?.type !== 'course-homework-playback' ||
@@ -547,7 +598,7 @@ export class CoursesController {
           payload?.lessonId !== lessonId ||
           payload?.assignmentId !== assignmentId ||
           payload?.submissionUserId !== submissionUserId ||
-          payload?.uaHash !== expectedUaHash
+          (!isMobilePlayback && payload?.uaHash !== expectedUaHash)
         ) {
           throw new UnauthorizedException('Invalid playback token');
         }
@@ -997,6 +1048,7 @@ export class CoursesController {
     @Headers('user-agent') userAgent: string,
     @Res({ passthrough: true }) res: Response,
     @Query('mediaId') mediaId?: string,
+    @Query('client') client?: string,
   ) {
     const { media } = await this.getAuthorizedLessonForUser(
       id,
@@ -1011,19 +1063,26 @@ export class CoursesController {
         courseId: id,
         lessonId,
         type: 'course-playback',
-        uaHash: this.buildUserAgentHash(userAgent),
+        client: client === 'mobile-native' ? 'mobile-native' : 'web',
+        uaHash:
+          client === 'mobile-native'
+            ? null
+            : this.buildUserAgentHash(userAgent),
       },
       { expiresIn: '2h' },
     );
 
     const isProd = process.env.NODE_ENV === 'production';
-    res.cookie(this.getPlaybackCookieName(), token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: isProd,
-      maxAge: 1000 * 60 * 60 * 2,
-      path: `/courses/${id}/lessons/${lessonId}`,
-    });
+    const isMobileNativeClient = client === 'mobile-native';
+    if (!isMobileNativeClient) {
+      res.cookie(this.getPlaybackCookieName(), token, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isProd,
+        maxAge: 1000 * 60 * 60 * 2,
+        path: `/courses/${id}/lessons/${lessonId}`,
+      });
+    }
 
     const isHlsLesson =
       media.streamType === 'hls' || media.videoUrl?.endsWith('.m3u8');
@@ -1181,6 +1240,7 @@ export class CoursesController {
     @Param('lessonId') lessonId: string,
     @Param('assignmentId') assignmentId: string,
     @Param('userId') submissionUserId: string,
+    @Query('client') client?: string,
   ) {
     const { submission } = await this.getAuthorizedHomeworkSubmissionForUser(
       id,
@@ -1198,7 +1258,11 @@ export class CoursesController {
         assignmentId,
         submissionUserId,
         type: 'course-homework-playback',
-        uaHash: this.buildUserAgentHash(req.headers['user-agent']),
+        client: client === 'mobile-native' ? 'mobile-native' : 'web',
+        uaHash:
+          client === 'mobile-native'
+            ? null
+            : this.buildUserAgentHash(req.headers['user-agent']),
       },
       { expiresIn: '2h' },
     );
@@ -1277,6 +1341,15 @@ export class CoursesController {
         manifest,
         assetKey,
         keyUrl,
+        (assetName: string) =>
+          this.buildProtectedHomeworkHlsAssetUrl(
+            id,
+            lessonId,
+            assignmentId,
+            submissionUserId,
+            assetName,
+            playbackToken,
+          ),
       );
       res.writeHead(
         200,
