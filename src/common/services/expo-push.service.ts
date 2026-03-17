@@ -37,9 +37,29 @@ export class ExpoPushService {
         body: JSON.stringify(payload),
       });
 
+      let responseBody: any = null;
+      try {
+        responseBody = await response.json();
+      } catch {
+        responseBody = null;
+      }
+
       if (!response.ok) {
         this.logger.warn(
           `Expo push send failed with status ${response.status}`,
+        );
+        if (responseBody) {
+          this.logger.warn(JSON.stringify(responseBody));
+        }
+        return;
+      }
+
+      const ticketErrors = (responseBody?.data || []).filter(
+        (entry: any) => entry?.status === 'error',
+      );
+      if (ticketErrors.length) {
+        this.logger.warn(
+          `Expo push ticket errors: ${JSON.stringify(ticketErrors)}`,
         );
       }
     } catch (error) {
