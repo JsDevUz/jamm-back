@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { APP_LIMITS } from '../../common/limits/app-limits';
 
 export type PromoCodeDocument = PromoCode & Document;
 
@@ -17,7 +18,11 @@ export class PromoCode {
   @Prop({ required: true })
   validUntil: Date;
 
-  @Prop({ type: Number, required: true, default: 30 })
+  @Prop({
+    type: Number,
+    required: true,
+    default: APP_LIMITS.promoDefaultDurationDays,
+  })
   durationInDays: number;
 
   @Prop({ default: true })

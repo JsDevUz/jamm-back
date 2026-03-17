@@ -445,7 +445,10 @@ export class PostsService {
   async getFeed(
     userId: string,
     type: string = 'foryou',
-    pagination: { page: number; limit: number } = { page: 1, limit: 15 },
+    pagination: { page: number; limit: number } = {
+      page: 1,
+      limit: APP_LIMITS.postFeedPageSize,
+    },
   ) {
     const filter: any = { isDeleted: false };
 
@@ -529,7 +532,7 @@ export class PostsService {
         liked: true,
       })
       .sort({ updatedAt: -1 })
-      .limit(50)
+      .limit(APP_LIMITS.postLikedPageSize)
       .lean()
       .exec();
 
@@ -722,7 +725,10 @@ export class PostsService {
 
   async getComments(
     postId: string,
-    pagination: { page: number; limit: number } = { page: 1, limit: 10 },
+    pagination: { page: number; limit: number } = {
+      page: 1,
+      limit: APP_LIMITS.postCommentsPageSize,
+    },
   ) {
     const post = await this.postModel.findById(postId).select('_id isDeleted').lean();
     if (!post || post.isDeleted) throw new NotFoundException('Post topilmadi');

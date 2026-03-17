@@ -22,6 +22,7 @@ import {
 } from './schemas/subscription.schema';
 import { RedisPresenceService } from '../presence/redis-presence.service';
 import { ChatsService } from '../chats/chats.service';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
 @Injectable()
 export class PremiumService {
@@ -112,25 +113,25 @@ export class PremiumService {
       const defaultPlans = [
         {
           name: '1 Oy',
-          durationInDays: 30,
+          durationInDays: APP_LIMITS.premiumPlanDurations.monthly,
           price: 5,
           features: ['group_limit_10', 'priority_support'],
         },
         {
           name: '3 Oy',
-          durationInDays: 90,
+          durationInDays: APP_LIMITS.premiumPlanDurations.quarterly,
           price: 12,
           features: ['group_limit_10', 'priority_support'],
         },
         {
           name: '6 Oy',
-          durationInDays: 180,
+          durationInDays: APP_LIMITS.premiumPlanDurations.semiAnnual,
           price: 20,
           features: ['group_limit_10', 'priority_support'],
         },
         {
           name: '12 Oy',
-          durationInDays: 365,
+          durationInDays: APP_LIMITS.premiumPlanDurations.annual,
           price: 35,
           features: ['group_limit_10', 'priority_support'],
         },
@@ -234,7 +235,10 @@ export class PremiumService {
 
     // Activate Premium for the promo's configured duration
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + (promo.durationInDays || 30));
+    expiresAt.setDate(
+      expiresAt.getDate() +
+        (promo.durationInDays || APP_LIMITS.promoDefaultDurationDays),
+    );
 
     await this.userModel.findByIdAndUpdate(userId, {
       premiumStatus: 'active',

@@ -77,7 +77,7 @@ export class ArticlesService implements OnModuleInit {
         assertMaxChars('Article tegi', tag, APP_TEXT_LIMITS.articleTagChars);
         return tag;
       })
-      .slice(0, 8);
+      .slice(0, APP_TEXT_LIMITS.articleTagCount);
   }
 
   private stripMarkdown(markdown: string) {
@@ -92,7 +92,7 @@ export class ArticlesService implements OnModuleInit {
 
   private buildExcerpt(markdown: string, excerpt?: string) {
     const base = (excerpt || '').trim() || this.stripMarkdown(markdown);
-    return base.slice(0, 220).trim();
+    return base.slice(0, APP_TEXT_LIMITS.articleExcerptChars).trim();
   }
 
   private async getArticleLimits(userId: string) {
@@ -513,7 +513,7 @@ export class ArticlesService implements OnModuleInit {
     const engagements = await this.articleEngagementModel
       .find({ userId: new Types.ObjectId(userId), liked: true })
       .sort({ updatedAt: -1 })
-      .limit(50)
+        .limit(APP_LIMITS.articleLikedPageSize)
       .lean()
       .exec();
 
@@ -544,7 +544,10 @@ export class ArticlesService implements OnModuleInit {
 
   async getLatestArticles(
     currentUserId?: string,
-    pagination: { page: number; limit: number } = { page: 1, limit: 20 },
+    pagination: { page: number; limit: number } = {
+      page: 1,
+      limit: APP_LIMITS.articleFeedPageSize,
+    },
   ) {
     const skip = (pagination.page - 1) * pagination.limit;
 
@@ -735,7 +738,10 @@ export class ArticlesService implements OnModuleInit {
 
   async getComments(
     identifier: string,
-    pagination: { page: number; limit: number } = { page: 1, limit: 10 },
+    pagination: { page: number; limit: number } = {
+      page: 1,
+      limit: APP_LIMITS.articleCommentsPageSize,
+    },
   ) {
     const article = await this.articleModel
       .findOne({

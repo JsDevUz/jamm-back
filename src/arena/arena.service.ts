@@ -679,9 +679,9 @@ export class ArenaService {
   /* ---- TESTS ---- */
 
   async createTest(userId: string, data: any): Promise<TestDocument> {
-    if (data.questions && data.questions.length > 30) {
+    if (data.questions && data.questions.length > APP_LIMITS.testsPerDeck) {
       throw new BadRequestException(
-        'Testda savollar soni 30 tadan oshmasligi kerak',
+        `Testda savollar soni ${APP_LIMITS.testsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
@@ -740,9 +740,9 @@ export class ArenaService {
       throw new ForbiddenException("Faqat test yaratuvchisi uni tahrirlay oladi");
     }
 
-    if (data.questions && data.questions.length > 30) {
+    if (data.questions && data.questions.length > APP_LIMITS.testsPerDeck) {
       throw new BadRequestException(
-        'Testda savollar soni 30 tadan oshmasligi kerak',
+        `Testda savollar soni ${APP_LIMITS.testsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
@@ -1268,9 +1268,9 @@ export class ArenaService {
     userId: string,
     data: any,
   ): Promise<FlashcardDeckDocument> {
-    if (data.cards && data.cards.length > 30) {
+    if (data.cards && data.cards.length > APP_LIMITS.flashcardsPerDeck) {
       throw new BadRequestException(
-        'Lug‘atda so‘zlar soni 30 tadan oshmasligi kerak',
+        `Lug‘atda so‘zlar soni ${APP_LIMITS.flashcardsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
@@ -1329,9 +1329,9 @@ export class ArenaService {
       throw new BadRequestException("Kamida bitta to'g'ri karta kiriting");
     }
 
-    if (cards.length > 30) {
+    if (cards.length > APP_LIMITS.flashcardsPerDeck) {
       throw new BadRequestException(
-        'Lug‘atda so‘zlar soni 30 tadan oshmasligi kerak',
+        `Lug‘atda so‘zlar soni ${APP_LIMITS.flashcardsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
@@ -1376,7 +1376,7 @@ export class ArenaService {
   async getUserFlashcardDecks(
     userId: string,
     page: number = 1,
-    limit: number = 20,
+    limit: number = APP_LIMITS.flashcardDeckPageSize,
   ): Promise<any> {
     const userObjectId = new Types.ObjectId(userId);
     const skip = (page - 1) * limit;
@@ -1625,9 +1625,9 @@ export class ArenaService {
       );
     }
 
-    if (items.length > 30) {
+    if (items.length > APP_LIMITS.sentenceBuilderItemsPerDeck) {
       throw new BadRequestException(
-        'Bir to‘plamda 30 tadan ortiq savol bo‘lishi mumkin emas',
+        `Bir to‘plamda ${APP_LIMITS.sentenceBuilderItemsPerDeck} tadan ortiq savol bo‘lishi mumkin emas`,
       );
     }
 
@@ -1698,9 +1698,9 @@ export class ArenaService {
       );
     }
 
-    if (items.length > 30) {
+    if (items.length > APP_LIMITS.sentenceBuilderItemsPerDeck) {
       throw new BadRequestException(
-        'Bir to‘plamda 30 tadan ortiq savol bo‘lishi mumkin emas',
+        `Bir to‘plamda ${APP_LIMITS.sentenceBuilderItemsPerDeck} tadan ortiq savol bo‘lishi mumkin emas`,
       );
     }
 

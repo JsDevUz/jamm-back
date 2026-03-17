@@ -34,7 +34,12 @@ export class ArticlesController {
   ) {}
 
   @Post('upload-image')
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({
+    default: {
+      limit: APP_LIMITS.articleUploadThrottleLimit,
+      ttl: APP_LIMITS.articleUploadThrottleTtlMs,
+    },
+  })
   @UseInterceptors(
     FileInterceptor(
       'file',
@@ -78,7 +83,7 @@ export class ArticlesController {
   ) {
     return this.articlesService.getLatestArticles(req.user._id.toString(), {
       page: Number(page) || 1,
-      limit: Number(limit) || 20,
+      limit: Number(limit) || APP_LIMITS.articleFeedPageSize,
     });
   }
 
@@ -100,7 +105,7 @@ export class ArticlesController {
   ) {
     return this.articlesService.getComments(id, {
       page: Number(page) || 1,
-      limit: Number(limit) || 10,
+      limit: Number(limit) || APP_LIMITS.articleCommentsPageSize,
     });
   }
 

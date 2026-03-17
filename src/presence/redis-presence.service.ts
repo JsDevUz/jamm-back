@@ -1,8 +1,9 @@
 import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { APP_LIMITS } from '../common/limits/app-limits';
 
-const PRESENCE_TTL = 30; // seconds
+const PRESENCE_TTL = APP_LIMITS.presenceTtlSeconds;
 const PRESENCE_PREFIX = 'online:';
 const DEVICE_PREFIX = 'devices:';
 const PRESENCE_CHANNEL = 'presence:status';
