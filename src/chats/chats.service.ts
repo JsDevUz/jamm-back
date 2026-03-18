@@ -266,6 +266,24 @@ export class ChatsService implements OnModuleInit {
     }
   }
 
+  private async getUnreadMessageIds(
+    chatId: string,
+    userId: string,
+  ): Promise<string[]> {
+    const unreadMessages = await this.messageModel
+      .find({
+        chatId: new Types.ObjectId(chatId),
+        isDeleted: false,
+        senderId: { $ne: new Types.ObjectId(userId) },
+        readBy: { $ne: new Types.ObjectId(userId) },
+      })
+      .select('_id')
+      .lean()
+      .exec();
+
+    return unreadMessages.map((message: any) => String(message._id));
+  }
+
   private async ensureUsersCanJoinMoreGroups(userIds: string[]) {
     const users = await this.userModel
       .find({ _id: { $in: userIds.map((id) => new Types.ObjectId(id)) } })
@@ -347,6 +365,7 @@ export class ChatsService implements OnModuleInit {
       chats.map(async (chat) => {
         const unreadCount = await this.messageModel.countDocuments({
           chatId: chat._id as Types.ObjectId,
+          isDeleted: false,
           senderId: { $ne: new Types.ObjectId(userId) },
           readBy: { $ne: new Types.ObjectId(userId) },
         });
@@ -907,6 +926,13 @@ export class ChatsService implements OnModuleInit {
     const chat = await this.getChat(chatId, userId);
     const strategy = this.getEncryptionStrategy(chat);
 
+    if (!before) {
+      const unreadMessageIds = await this.getUnreadMessageIds(chatId, userId);
+      if (unreadMessageIds.length > 0) {
+        await this.markMessagesAsRead(chatId, userId, unreadMessageIds);
+      }
+    }
+
     const chatObjectId = new Types.ObjectId(chatId);
     const cursorDate =
       before && !Number.isNaN(new Date(before).getTime()) ? new Date(before) : null;
@@ -1259,6 +1285,7 @@ export class ChatsService implements OnModuleInit {
       {
         chatId: new Types.ObjectId(chatId),
         _id: { $in: messageIds.map((id) => new Types.ObjectId(id)) },
+        isDeleted: false,
         senderId: { $ne: new Types.ObjectId(userId) },
         readBy: { $ne: new Types.ObjectId(userId) },
       },

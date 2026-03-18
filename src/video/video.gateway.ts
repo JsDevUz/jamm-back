@@ -7,9 +7,11 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
+import { InjectModel } from '@nestjs/mongoose';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { Model, Types } from 'mongoose';
 import { PremiumService } from '../premium/premium.service';
 import {
   APP_LIMITS,
@@ -19,6 +21,7 @@ import {
 import { getAllowedOrigins } from '../common/config/cors.config';
 import { verifySocketToken } from '../common/auth/ws-auth.util';
 import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
+import { Chat, ChatDocument } from '../chats/schemas/chat.schema';
 
 interface KnockEntry {
   peerKey: string;
@@ -50,6 +53,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly rateLimiter = new SocketRateLimiter();
 
   constructor(
+    @InjectModel(Chat.name)
+    private readonly chatModel: Model<ChatDocument>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly premiumService: PremiumService,
@@ -111,6 +116,57 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private getPeerKey(client: Socket): string {
     return String(client.data?.user?._id || client.id);
+  }
+
+  private isUserChatMember(chat: ChatDocument, userId: string): boolean {
+    return chat.members.some((memberId) => String(memberId) === userId);
+  }
+
+  private async rehydratePrivateRoom(
+    roomId: string,
+    userId: string,
+  ): Promise<RoomInfo | null> {
+    if (!Types.ObjectId.isValid(userId)) {
+      return null;
+    }
+
+    const chat = await this.chatModel
+      .findOne({
+        videoCallRoomId: roomId,
+        members: new Types.ObjectId(userId),
+      })
+      .select('name members videoCallCreatorId')
+      .exec();
+
+    if (!chat || !chat.videoCallCreatorId || !this.isUserChatMember(chat, userId)) {
+      return null;
+    }
+
+    const room: RoomInfo = {
+      peers: new Map(),
+      isPrivate: true,
+      title: this.sanitizeRoomTitle(chat.name) || 'Private meet',
+      participantLimit: 2,
+      creatorSocketId: '',
+      creatorUserId: String(chat.videoCallCreatorId),
+      knockQueue: new Map(),
+    };
+
+    this.rooms.set(roomId, room);
+    return room;
+  }
+
+  private notifyCreatorOfPendingKnocks(roomId: string, room: RoomInfo) {
+    if (!room.creatorSocketId || room.knockQueue.size === 0) {
+      return;
+    }
+
+    room.knockQueue.forEach((entry) => {
+      this.server.to(room.creatorSocketId).emit('knock-request', {
+        peerId: entry.peerKey,
+        displayName: entry.displayName,
+      });
+    });
   }
 
   async handleConnection(client: Socket) {
@@ -227,6 +283,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         title: existingRoom.title,
         isPrivate: existingRoom.isPrivate,
       });
+      this.notifyCreatorOfPendingKnocks(roomId, existingRoom);
       return;
     }
 
@@ -287,12 +344,16 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.rateLimiter.take(`video:join-room:${client.id}`, 15, 60_000);
     const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
     const displayName = this.sanitizeDisplayName(data?.displayName);
-    const room = this.rooms.get(roomId);
+    const userId = String(client.data?.user?._id || '');
+    let room: RoomInfo | null | undefined = this.rooms.get(roomId);
     const peerKey = this.getPeerKey(client);
 
     if (!room) {
-      client.emit('error', { message: 'Room not found' });
-      return;
+      room = await this.rehydratePrivateRoom(roomId, userId);
+      if (!room) {
+        client.emit('error', { message: 'Room not found' });
+        return;
+      }
     }
 
     if (room.peers.has(client.id)) {
@@ -479,13 +540,17 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
     this.rateLimiter.take(`video:offer:${client.id}`, 600, 60_000);
-    const sharedRoom = this.findSharedRoomForPeers(client.id, data.targetId);
+    const targetId =
+      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || targetId === client.id) {
+      return;
+    }
+    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
     if (!sharedRoom) {
-      client.emit('error', { message: 'Signal yuborish uchun room ruxsati yo‘q' });
       return;
     }
     this.server
-      .to(data.targetId)
+      .to(targetId)
       .emit('offer', { senderId: client.id, sdp: data.sdp });
   }
 
@@ -495,13 +560,17 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { targetId: string; sdp: any },
   ) {
     this.rateLimiter.take(`video:answer:${client.id}`, 600, 60_000);
-    const sharedRoom = this.findSharedRoomForPeers(client.id, data.targetId);
+    const targetId =
+      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || targetId === client.id) {
+      return;
+    }
+    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
     if (!sharedRoom) {
-      client.emit('error', { message: 'Signal yuborish uchun room ruxsati yo‘q' });
       return;
     }
     this.server
-      .to(data.targetId)
+      .to(targetId)
       .emit('answer', { senderId: client.id, sdp: data.sdp });
   }
 
@@ -511,12 +580,16 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { targetId: string; candidate: any },
   ) {
     this.rateLimiter.take(`video:ice:${client.id}`, 4000, 60_000);
-    const sharedRoom = this.findSharedRoomForPeers(client.id, data.targetId);
-    if (!sharedRoom) {
-      client.emit('error', { message: 'ICE yuborish uchun room ruxsati yo‘q' });
+    const targetId =
+      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || targetId === client.id) {
       return;
     }
-    this.server.to(data.targetId).emit('ice-candidate', {
+    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
+    if (!sharedRoom) {
+      return;
+    }
+    this.server.to(targetId).emit('ice-candidate', {
       senderId: client.id,
       candidate: data.candidate,
     });
