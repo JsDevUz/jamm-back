@@ -6,6 +6,10 @@ import { ArenaGateway } from './arena.gateway';
 import { Test, TestSchema } from './schemas/test.schema';
 import { FlashcardDeck, FlashcardDeckSchema } from './schemas/flashcard.schema';
 import {
+  FlashcardFolder,
+  FlashcardFolderSchema,
+} from './schemas/flashcard-folder.schema';
+import {
   SentenceBuilderDeck,
   SentenceBuilderDeckSchema,
 } from './schemas/sentence-builder.schema';
@@ -41,6 +45,7 @@ import { UsersModule } from '../users/users.module';
     MongooseModule.forFeature([
       { name: Test.name, schema: TestSchema },
       { name: FlashcardDeck.name, schema: FlashcardDeckSchema },
+      { name: FlashcardFolder.name, schema: FlashcardFolderSchema },
       { name: SentenceBuilderDeck.name, schema: SentenceBuilderDeckSchema },
       { name: BattleHistory.name, schema: BattleHistorySchema },
       { name: FlashcardProgress.name, schema: FlashcardProgressSchema },

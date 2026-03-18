@@ -216,6 +216,54 @@ export class ArenaController {
     );
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('flashcard-folders')
+  createFlashcardFolder(@Request() req, @Body() body: any) {
+    return this.arenaService.createFlashcardFolder(
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('flashcard-folders/:id')
+  updateFlashcardFolder(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.arenaService.updateFlashcardFolder(
+      id,
+      req.user._id.toString(),
+      body,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('flashcard-folders')
+  getUserFlashcardFolders(@Request() req) {
+    return this.arenaService.getUserFlashcardFolders(req.user._id.toString());
+  }
+
+  @Get('flashcard-folders/:id')
+  getFlashcardFolder(@Param('id') id: string) {
+    return this.arenaService.getFlashcardFolderDetail(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('flashcard-folders/:id/join')
+  joinFlashcardFolder(@Request() req, @Param('id') id: string) {
+    return this.arenaService.joinFlashcardFolder(id, req.user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('flashcard-folders/:id/leave')
+  leaveFlashcardFolder(@Request() req, @Param('id') id: string) {
+    return this.arenaService.leaveFlashcardFolder(id, req.user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('flashcard-folders/:id')
+  deleteFlashcardFolder(@Request() req, @Param('id') id: string) {
+    return this.arenaService.deleteFlashcardFolder(id, req.user._id.toString());
+  }
+
   /* ---- SENTENCE BUILDERS ---- */
 
   @UseGuards(JwtAuthGuard)

@@ -12,6 +12,10 @@ import {
   FlashcardDeckDocument,
 } from './schemas/flashcard.schema';
 import {
+  FlashcardFolder,
+  FlashcardFolderDocument,
+} from './schemas/flashcard-folder.schema';
+import {
   BattleHistory,
   BattleHistoryDocument,
 } from './schemas/battle-history.schema';
@@ -73,6 +77,8 @@ export class ArenaService {
     @InjectModel(Test.name) private testModel: Model<TestDocument>,
     @InjectModel(FlashcardDeck.name)
     private flashcardModel: Model<FlashcardDeckDocument>,
+    @InjectModel(FlashcardFolder.name)
+    private flashcardFolderModel: Model<FlashcardFolderDocument>,
     @InjectModel(SentenceBuilderDeck.name)
     private sentenceBuilderModel: Model<SentenceBuilderDeckDocument>,
     @InjectModel(BattleHistory.name)
@@ -338,7 +344,51 @@ export class ArenaService {
     );
   }
 
+  private async generateUniqueFlashcardFolderSlug(
+    excludeFolderId?: string,
+  ): Promise<string> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const slug = generateShortSlug(10);
+      const existing = await this.flashcardFolderModel
+        .findOne({
+          urlSlug: slug,
+          ...(excludeFolderId
+            ? { _id: { $ne: new Types.ObjectId(excludeFolderId) } }
+            : {}),
+        })
+        .select('_id')
+        .lean()
+        .exec();
+
+      if (!existing) {
+        return slug;
+      }
+    }
+
+    throw new BadRequestException(
+      'Flashcard folder havolasi yaratilmadi, qayta urinib ko‘ring',
+    );
+  }
+
   private buildFlashcardDeckIdentifierQuery(identifier: string) {
+    const normalizedIdentifier = String(identifier || '').trim().toLowerCase();
+    const isObjectId =
+      Types.ObjectId.isValid(normalizedIdentifier) &&
+      String(new Types.ObjectId(normalizedIdentifier)) === normalizedIdentifier;
+
+    if (isObjectId) {
+      return {
+        $or: [
+          { _id: new Types.ObjectId(normalizedIdentifier) },
+          { urlSlug: normalizedIdentifier },
+        ],
+      };
+    }
+
+    return { urlSlug: normalizedIdentifier };
+  }
+
+  private buildFlashcardFolderIdentifierQuery(identifier: string) {
     const normalizedIdentifier = String(identifier || '').trim().toLowerCase();
     const isObjectId =
       Types.ObjectId.isValid(normalizedIdentifier) &&
@@ -382,10 +432,111 @@ export class ArenaService {
     return deck;
   }
 
+  private async ensureFlashcardFolderSlug<
+    T extends { _id: Types.ObjectId; urlSlug?: string },
+  >(folder: T): Promise<T> {
+    if (folder?.urlSlug) {
+      return folder;
+    }
+
+    const slug = await this.generateUniqueFlashcardFolderSlug(
+      folder._id.toString(),
+    );
+    await this.flashcardFolderModel
+      .updateOne(
+        {
+          _id: folder._id,
+          $or: [
+            { urlSlug: { $exists: false } },
+            { urlSlug: null },
+            { urlSlug: '' },
+          ],
+        },
+        { $set: { urlSlug: slug } },
+      )
+      .exec();
+
+    folder.urlSlug = slug;
+    return folder;
+  }
+
   private async findFlashcardDeckByIdentifier(identifier: string) {
     return this.flashcardModel
       .findOne(this.buildFlashcardDeckIdentifierQuery(identifier))
       .exec();
+  }
+
+  private async findFlashcardFolderByIdentifier(identifier: string) {
+    return this.flashcardFolderModel
+      .findOne(this.buildFlashcardFolderIdentifierQuery(identifier))
+      .exec();
+  }
+
+  private validateFlashcardFolderPayload(data: any) {
+    const title = String(data?.title || '').trim();
+    assertMaxChars('Flashcard folder nomi', title, APP_TEXT_LIMITS.flashcardTitleChars);
+
+    return {
+      title,
+      isPublic: data?.isPublic !== false,
+    };
+  }
+
+  private async ensureOwnedFlashcardFolder(
+    folderId: string | null | undefined,
+    userId: string,
+  ) {
+    const normalizedFolderId = String(folderId || '').trim();
+    if (!normalizedFolderId) {
+      return null;
+    }
+
+    const folder = await this.findFlashcardFolderByIdentifier(normalizedFolderId);
+    if (!folder) {
+      throw new NotFoundException('Flashcard folder topilmadi');
+    }
+
+    if (folder.createdBy.toString() !== userId) {
+      throw new ForbiddenException(
+        "Faqat o'zingiz yaratgan flashcard folderga to'plam biriktira olasiz",
+      );
+    }
+
+    await this.ensureFlashcardFolderSlug(folder as any);
+    return folder;
+  }
+
+  private async getDecksByFlashcardFolder(folderId: Types.ObjectId | string) {
+    const folderObjectId =
+      typeof folderId === 'string' ? new Types.ObjectId(folderId) : folderId;
+
+    const decks = await this.flashcardModel
+      .find({ folderId: folderObjectId })
+      .populate('createdBy', 'nickname username avatar')
+      .populate('members.userId', 'nickname username avatar')
+      .populate('folderId', 'title urlSlug')
+      .sort({ createdAt: -1 })
+      .exec();
+
+    await Promise.all(
+      decks.map((deck) => this.ensureFlashcardDeckSlug(deck as any)),
+    );
+
+    return decks;
+  }
+
+  private serializeFlashcardDeck(deck: any) {
+    const { __v, ...safeDeck } = deck?.toObject ? deck.toObject() : deck;
+    return safeDeck;
+  }
+
+  private serializeFlashcardFolder(folder: any, decks: any[] = []) {
+    const { __v, ...safeFolder } = folder?.toObject ? folder.toObject() : folder;
+    return {
+      ...safeFolder,
+      decks: decks.map((deck) => this.serializeFlashcardDeck(deck)),
+      deckCount: decks.length,
+    };
   }
 
   private validateSentenceBuilderPayload(data: any, items: any[]) {
@@ -1291,6 +1442,7 @@ export class ArenaService {
     }
 
     const { title, cards } = this.validateFlashcardPayload(data);
+    const folder = await this.ensureOwnedFlashcardFolder(data?.folderId, userId);
     if (!title) {
       throw new BadRequestException('Lugat sarlavhasini kiriting');
     }
@@ -1298,11 +1450,12 @@ export class ArenaService {
       throw new BadRequestException("Kamida bitta to'g'ri karta kiriting");
     }
     const createdDeck = new this.flashcardModel({
-      ...data,
       title,
       cards,
       urlSlug: await this.generateUniqueFlashcardDeckSlug(),
       createdBy: new Types.ObjectId(userId),
+      folderId: folder?._id || null,
+      isPublic: data?.isPublic !== false,
     });
     return createdDeck.save();
   }
@@ -1320,6 +1473,7 @@ export class ArenaService {
     }
 
     const { title, cards } = this.validateFlashcardPayload(data);
+    const folder = await this.ensureOwnedFlashcardFolder(data?.folderId, userId);
 
     if (!title) {
       throw new BadRequestException('Lugat sarlavhasini kiriting');
@@ -1338,6 +1492,7 @@ export class ArenaService {
     deck.title = title;
     deck.cards = cards as any;
     deck.isPublic = data?.isPublic !== false;
+    deck.folderId = folder?._id || null;
 
     await this.ensureFlashcardDeckSlug(deck);
 
@@ -1390,6 +1545,7 @@ export class ArenaService {
         .find(query)
         .populate('createdBy', 'nickname avatar')
         .populate('members.userId', 'nickname avatar')
+        .populate('folderId', 'title urlSlug')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1402,10 +1558,7 @@ export class ArenaService {
     );
 
     return {
-      data: decks.map((deck: any) => {
-        const { __v, ...safeDeck } = deck.toObject ? deck.toObject() : deck;
-        return safeDeck;
-      }),
+      data: decks.map((deck: any) => this.serializeFlashcardDeck(deck)),
       total,
       page,
       limit,
@@ -1420,7 +1573,8 @@ export class ArenaService {
     const deck = await this.flashcardModel
       .findOne(this.buildFlashcardDeckIdentifierQuery(deckId))
       .populate('createdBy', 'nickname avatar')
-      .populate('members.userId', 'nickname avatar');
+      .populate('members.userId', 'nickname avatar')
+      .populate('folderId', 'title urlSlug');
     if (!deck) throw new NotFoundException('Lugat topilmadi');
 
     await this.ensureFlashcardDeckSlug(deck as any);
@@ -1447,12 +1601,202 @@ export class ArenaService {
       };
     });
 
-    const { __v, ...safeDeck } = deck.toObject();
+    const safeDeck = this.serializeFlashcardDeck(deck);
 
     return {
       ...safeDeck,
       cards: cardsWithProgress,
     };
+  }
+
+  async createFlashcardFolder(userId: string, data: any): Promise<any> {
+    const { title, isPublic } = this.validateFlashcardFolderPayload(data);
+    if (!title) {
+      throw new BadRequestException('Flashcard folder nomini kiriting');
+    }
+
+    const createdFolder = new this.flashcardFolderModel({
+      title,
+      isPublic,
+      urlSlug: await this.generateUniqueFlashcardFolderSlug(),
+      createdBy: new Types.ObjectId(userId),
+    });
+
+    const savedFolder = await createdFolder.save();
+    const hydratedFolder = await this.flashcardFolderModel
+      .findById(savedFolder._id)
+      .populate('createdBy', 'nickname username avatar')
+      .populate('members.userId', 'nickname username avatar')
+      .exec();
+
+    await this.ensureFlashcardFolderSlug(hydratedFolder as any);
+    return this.serializeFlashcardFolder(hydratedFolder);
+  }
+
+  async updateFlashcardFolder(folderId: string, userId: string, data: any): Promise<any> {
+    const folder = await this.findFlashcardFolderByIdentifier(folderId);
+    if (!folder) throw new NotFoundException('Flashcard folder topilmadi');
+
+    if (folder.createdBy.toString() !== userId) {
+      throw new ForbiddenException(
+        "Faqat folder yaratuvchisi uni tahrirlay oladi",
+      );
+    }
+
+    const { title, isPublic } = this.validateFlashcardFolderPayload(data);
+    if (!title) {
+      throw new BadRequestException('Flashcard folder nomini kiriting');
+    }
+
+    folder.title = title;
+    folder.isPublic = isPublic;
+    await this.ensureFlashcardFolderSlug(folder as any);
+    await folder.save();
+
+    return this.getFlashcardFolderDetail(folderId);
+  }
+
+  async deleteFlashcardFolder(folderId: string, userId: string): Promise<any> {
+    const folder = await this.findFlashcardFolderByIdentifier(folderId);
+    if (!folder) throw new NotFoundException('Flashcard folder topilmadi');
+
+    if (folder.createdBy.toString() !== userId) {
+      throw new ForbiddenException(
+        "Faqat folder yaratuvchisi uni o'chira oladi",
+      );
+    }
+
+    await this.flashcardModel
+      .updateMany({ folderId: folder._id }, { $set: { folderId: null } })
+      .exec();
+    await this.flashcardFolderModel.deleteOne({ _id: folder._id }).exec();
+
+    return {
+      success: true,
+      deletedFolderId: folderId,
+    };
+  }
+
+  async getUserFlashcardFolders(userId: string): Promise<any> {
+    const userObjectId = new Types.ObjectId(userId);
+    const folders = await this.flashcardFolderModel
+      .find({
+        $or: [{ createdBy: userObjectId }, { 'members.userId': userObjectId }],
+      })
+      .populate('createdBy', 'nickname username avatar')
+      .populate('members.userId', 'nickname username avatar')
+      .sort({ createdAt: -1 })
+      .exec();
+
+    await Promise.all(
+      folders.map((folder) => this.ensureFlashcardFolderSlug(folder as any)),
+    );
+
+    const deckCollections = await Promise.all(
+      folders.map((folder) => this.getDecksByFlashcardFolder(folder._id)),
+    );
+
+    return {
+      data: folders.map((folder, index) =>
+        this.serializeFlashcardFolder(folder, deckCollections[index] || []),
+      ),
+    };
+  }
+
+  async getFlashcardFolderDetail(folderId: string): Promise<any> {
+    const folder = await this.flashcardFolderModel
+      .findOne(this.buildFlashcardFolderIdentifierQuery(folderId))
+      .populate('createdBy', 'nickname username avatar')
+      .populate('members.userId', 'nickname username avatar')
+      .exec();
+    if (!folder) {
+      throw new NotFoundException('Flashcard folder topilmadi');
+    }
+
+    await this.ensureFlashcardFolderSlug(folder as any);
+    const decks = await this.getDecksByFlashcardFolder(folder._id);
+
+    return this.serializeFlashcardFolder(folder, decks);
+  }
+
+  async joinFlashcardFolder(folderId: string, userId: string): Promise<any> {
+    const folder = await this.findFlashcardFolderByIdentifier(folderId);
+    if (!folder) throw new NotFoundException('Flashcard folder topilmadi');
+
+    const userObjectId = new Types.ObjectId(userId);
+    const isMember = folder.members.some((member) => member.userId.toString() === userId);
+    const isCreator = folder.createdBy.toString() === userId;
+
+    if (!isMember && !isCreator) {
+      folder.members.push({ userId: userObjectId, joinedAt: new Date() });
+      await folder.save();
+    }
+
+    await this.flashcardModel
+      .updateMany(
+        {
+          folderId: folder._id,
+          createdBy: { $ne: userObjectId },
+          'members.userId': { $ne: userObjectId },
+        },
+        {
+          $push: {
+            members: {
+              userId: userObjectId,
+              joinedAt: new Date(),
+            },
+          },
+        },
+      )
+      .exec();
+
+    return this.getFlashcardFolderDetail(folderId);
+  }
+
+  async leaveFlashcardFolder(folderId: string, userId: string): Promise<any> {
+    const folder = await this.findFlashcardFolderByIdentifier(folderId);
+    if (!folder) throw new NotFoundException('Flashcard folder topilmadi');
+
+    if (folder.createdBy.toString() === userId) {
+      throw new ForbiddenException('Tuzuvchi o‘z flashcard folderidan chiqa olmaydi');
+    }
+
+    const userObjectId = new Types.ObjectId(userId);
+    folder.members = folder.members.filter((member) => member.userId.toString() !== userId);
+    await folder.save();
+
+    const folderDecks = await this.flashcardModel
+      .find({ folderId: folder._id })
+      .select('_id createdBy')
+      .lean()
+      .exec();
+    const removableDeckIds = folderDecks
+      .filter((deck: any) => String(deck.createdBy || '') !== userId)
+      .map((deck: any) => new Types.ObjectId(deck._id));
+
+    if (removableDeckIds.length > 0) {
+      await this.flashcardModel
+        .updateMany(
+          { _id: { $in: removableDeckIds } },
+          {
+            $pull: {
+              members: {
+                userId: userObjectId,
+              },
+            },
+          },
+        )
+        .exec();
+
+      await this.progressModel
+        .deleteMany({
+          userId: userObjectId,
+          deckId: { $in: removableDeckIds },
+        })
+        .exec();
+    }
+
+    return this.getFlashcardFolderDetail(folderId);
   }
 
   async joinFlashcardDeck(

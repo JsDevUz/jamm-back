@@ -30,6 +30,9 @@ export class FlashcardDeck {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'FlashcardFolder', required: false, default: null })
+  folderId?: Types.ObjectId | null;
+
   @Prop({ type: [FlashcardSchema], default: [] })
   cards: Flashcard[];
 
