@@ -153,6 +153,62 @@ export class ArticlesController {
     );
   }
 
+  @Patch(':id/comments/:commentId')
+  updateComment(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+    @Body() body: ArticleCommentDto,
+  ) {
+    return this.articlesService.updateComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+      body.content,
+    );
+  }
+
+  @Post(':id/comments/:commentId/update')
+  updateCommentViaPost(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+    @Body() body: ArticleCommentDto,
+  ) {
+    return this.articlesService.updateComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+      body.content,
+    );
+  }
+
+  @Delete(':id/comments/:commentId')
+  deleteComment(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.articlesService.deleteComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+    );
+  }
+
+  @Post(':id/comments/:commentId/delete')
+  deleteCommentViaPost(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.articlesService.deleteComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+    );
+  }
+
   @Delete(':id')
   deleteArticle(@Request() req, @Param('id') id: string) {
     return this.articlesService.deleteArticle(id, req.user._id.toString());
