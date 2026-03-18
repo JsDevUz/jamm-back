@@ -26,7 +26,7 @@ import { UploadValidationService } from '../common/uploads/upload-validation.ser
 import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
 import { APP_LIMITS } from '../common/limits/app-limits';
 
-@Controller('posts')
+@Controller(['posts', 'post'])
 export class PostsController {
   constructor(
     private readonly postsService: PostsService,
@@ -153,6 +153,38 @@ export class PostsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch(':id/comments/:commentId')
+  updateComment(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+    @Body() body: PostContentDto,
+  ) {
+    return this.postsService.updateComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+      body.content,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/comments/:commentId/update')
+  updateCommentViaPost(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+    @Body() body: PostContentDto,
+  ) {
+    return this.postsService.updateComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+      body.content,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get(':id/comments')
   getComments(
     @Param('id') id: string,
@@ -163,6 +195,34 @@ export class PostsController {
       page: Number(page) || 1,
       limit: Number(limit) || 10,
     });
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/comments/:commentId')
+  deleteComment(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.postsService.deleteComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/comments/:commentId/delete')
+  deleteCommentViaPost(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.postsService.deleteComment(
+      id,
+      commentId,
+      req.user._id.toString(),
+    );
   }
 
   @UseGuards(JwtAuthGuard)

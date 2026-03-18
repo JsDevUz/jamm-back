@@ -239,26 +239,50 @@ export class CoursesController {
       }, 0);
   }
 
-  private async getVideoDurationSeconds(filePath: string) {
+  private async getVideoStreamProfile(filePath: string) {
     try {
       const { stdout } = await execFileAsync('ffprobe', [
         '-v',
         'error',
+        '-print_format',
+        'json',
         '-show_entries',
-        'format=duration',
-        '-of',
-        'default=noprint_wrappers=1:nokey=1',
+        'format=duration:stream=codec_type,codec_name,pix_fmt',
+        '-show_streams',
         filePath,
       ]);
-      const duration = Number(String(stdout || '').trim());
-      if (Number.isFinite(duration) && duration > 0) {
-        return Math.round(duration);
-      }
+      const parsed = JSON.parse(String(stdout || '{}')) as {
+        format?: { duration?: string | number };
+        streams?: Array<{
+          codec_type?: string;
+          codec_name?: string;
+          pix_fmt?: string;
+        }>;
+      };
+      const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+      const videoStream =
+        streams.find((stream) => stream?.codec_type === 'video') || null;
+      const audioStream =
+        streams.find((stream) => stream?.codec_type === 'audio') || null;
+      const duration = Number(parsed.format?.duration || 0);
+
+      return {
+        durationSeconds:
+          Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0,
+        videoCodec: String(videoStream?.codec_name || '').toLowerCase(),
+        audioCodec: String(audioStream?.codec_name || '').toLowerCase(),
+        videoPixelFormat: String(videoStream?.pix_fmt || '').toLowerCase(),
+      };
     } catch (error) {
-      console.error('Failed to read video duration with ffprobe:', error);
+      console.error('Failed to read video profile with ffprobe:', error);
     }
 
-    return 0;
+    return {
+      durationSeconds: 0,
+      videoCodec: '',
+      audioCodec: '',
+      videoPixelFormat: '',
+    };
   }
 
   private async transcodeVideoToHls(file: Express.Multer.File) {
@@ -280,6 +304,13 @@ export class CoursesController {
 
     try {
       await writeFile(inputPath, file.buffer);
+      const videoProfile = await this.getVideoStreamProfile(inputPath);
+      const shouldCopyVideo =
+        videoProfile.videoCodec === 'h264' &&
+        (!videoProfile.videoPixelFormat ||
+          videoProfile.videoPixelFormat.includes('420'));
+      const hasAudio = Boolean(videoProfile.audioCodec);
+      const shouldCopyAudio = hasAudio && videoProfile.audioCodec === 'aac';
       await mkdir(outputDir, { recursive: true });
       await writeFile(keyPath, keyBuffer);
       await writeFile(
@@ -287,24 +318,36 @@ export class CoursesController {
         `${keyUriPlaceholder}\n${keyPath}\n${keyIvHex}\n`,
       );
 
-      await execFileAsync('ffmpeg', [
+      const ffmpegArgs = [
         '-y',
         '-i',
         inputPath,
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-crf',
-        '23',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k',
-        '-ac',
-        '2',
+      ];
+
+      if (shouldCopyVideo) {
+        ffmpegArgs.push('-c:v', 'copy');
+      } else {
+        ffmpegArgs.push(
+          '-c:v',
+          'libx264',
+          '-preset',
+          'superfast',
+          '-crf',
+          '24',
+          '-pix_fmt',
+          'yuv420p',
+        );
+      }
+
+      if (!hasAudio) {
+        ffmpegArgs.push('-an');
+      } else if (shouldCopyAudio) {
+        ffmpegArgs.push('-c:a', 'copy');
+      } else {
+        ffmpegArgs.push('-c:a', 'aac', '-b:a', '96k', '-ac', '2');
+      }
+
+      ffmpegArgs.push(
         '-hls_time',
         '6',
         '-hls_playlist_type',
@@ -316,13 +359,14 @@ export class CoursesController {
         '-hls_segment_filename',
         join(outputDir, 'segment_%03d.ts'),
         playlistPath,
-      ]);
+      );
+
+      await execFileAsync('ffmpeg', ffmpegArgs);
 
       const fileNames = (await readdir(outputDir)).sort();
-      const assetKeys: string[] = [];
       const manifestContent = await readFile(playlistPath, 'utf8');
       const durationSeconds =
-        (await this.getVideoDurationSeconds(inputPath)) ||
+        videoProfile.durationSeconds ||
         Math.round(this.getManifestDurationSeconds(manifestContent));
 
       const keyAsset = `${assetFolder}/${keyFileName}`;
@@ -332,15 +376,24 @@ export class CoursesController {
         'application/octet-stream',
       );
 
-      for (const fileName of fileNames) {
-        const filePath = join(outputDir, fileName);
-        const key = `${assetFolder}/${fileName}`;
-        await this.r2Service.uploadBuffer(
-          await readFile(filePath),
-          key,
-          this.getMimeType(fileName),
+      const assetEntries = fileNames.map((fileName) => ({
+        fileName,
+        filePath: join(outputDir, fileName),
+        key: `${assetFolder}/${fileName}`,
+      }));
+      const assetKeys = assetEntries.map((entry) => entry.key);
+
+      for (let index = 0; index < assetEntries.length; index += 4) {
+        const batch = assetEntries.slice(index, index + 4);
+        await Promise.all(
+          batch.map(async ({ fileName, filePath, key }) => {
+            await this.r2Service.uploadBuffer(
+              await readFile(filePath),
+              key,
+              this.getMimeType(fileName),
+            );
+          }),
         );
-        assetKeys.push(key);
       }
 
       return {

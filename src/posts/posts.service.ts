@@ -723,6 +723,125 @@ export class PostsService {
     return { replies: repliesCount };
   }
 
+  async updateComment(
+    postId: string,
+    commentId: string,
+    userId: string,
+    content: string,
+  ) {
+    const post = await this.postModel
+      .findById(postId)
+      .select('_id isDeleted')
+      .lean();
+    if (!post || post.isDeleted) {
+      throw new NotFoundException('Post topilmadi');
+    }
+
+    if (!Types.ObjectId.isValid(commentId)) {
+      throw new BadRequestException('Izoh identifikatori noto‘g‘ri');
+    }
+
+    if (!String(content || '').trim()) {
+      throw new BadRequestException('Izoh bo‘sh bo‘lishi mumkin emas');
+    }
+
+    assertMaxChars(
+      'Gurung izohi',
+      content.trim(),
+      APP_TEXT_LIMITS.postCommentChars,
+    );
+
+    const comment = await this.postCommentModel
+      .findOne({
+        _id: new Types.ObjectId(commentId),
+        postId: post._id,
+        isDeleted: false,
+      })
+      .exec();
+
+    if (!comment) {
+      throw new NotFoundException('Izoh topilmadi');
+    }
+
+    if (String(comment.userId) !== userId) {
+      throw new ForbiddenException(
+        "Faqat o'zingizning izohingizni tahrirlashingiz mumkin",
+      );
+    }
+
+    const encrypted = this.encryptionStrategy.encrypt(content.trim());
+    comment.content = encrypted.encryptedContent;
+    comment.iv = encrypted.iv;
+    comment.authTag = encrypted.authTag;
+    comment.isEncrypted = true;
+    comment.keyVersion = encrypted.keyVersion;
+    await comment.save();
+
+    return { updated: true };
+  }
+
+  async deleteComment(postId: string, commentId: string, userId: string) {
+    const post = await this.postModel
+      .findById(postId)
+      .select('_id isDeleted commentsCount')
+      .lean();
+    if (!post || post.isDeleted) {
+      throw new NotFoundException('Post topilmadi');
+    }
+
+    if (!Types.ObjectId.isValid(commentId)) {
+      throw new BadRequestException('Izoh identifikatori noto‘g‘ri');
+    }
+
+    const comment = await this.postCommentModel
+      .findOne({
+        _id: new Types.ObjectId(commentId),
+        postId: post._id,
+        isDeleted: false,
+      })
+      .lean()
+      .exec();
+
+    if (!comment) {
+      throw new NotFoundException('Izoh topilmadi');
+    }
+
+    if (String(comment.userId) !== userId) {
+      throw new ForbiddenException(
+        "Faqat o'zingizning izohingizni o'chirishingiz mumkin",
+      );
+    }
+
+    let deletedCount = 1;
+
+    if (comment.parentCommentId) {
+      await this.postCommentModel.deleteOne({ _id: comment._id }).exec();
+    } else {
+      const repliesCount = await this.postCommentModel.countDocuments({
+        parentCommentId: comment._id,
+        isDeleted: false,
+      });
+      deletedCount += repliesCount;
+
+      await this.postCommentModel
+        .deleteMany({
+          $or: [{ _id: comment._id }, { parentCommentId: comment._id }],
+        })
+        .exec();
+    }
+
+    const nextCommentsCount = Math.max(
+      0,
+      Number(post.commentsCount || 0) - deletedCount,
+    );
+
+    await this.postModel
+      .updateOne({ _id: post._id }, { commentsCount: nextCommentsCount })
+      .exec();
+
+    return { comments: nextCommentsCount };
+  }
+
   async getComments(
     postId: string,
     pagination: { page: number; limit: number } = {

@@ -984,28 +984,34 @@ export class CoursesService implements OnModuleInit {
       };
     }
 
-    try {
-      const deck = await this.arenaService.getSentenceBuilderDeckById(
-        parsed.identifier,
-        requestUserId,
-      );
-      if (deck?.isPublic === false) {
-        throw new ForbiddenException(
-          'Yopiq gap tuzish to‘plami uchun share havolasidan foydalaning',
+    const canBeSentenceBuilderId =
+      Types.ObjectId.isValid(parsed.identifier) &&
+      String(new Types.ObjectId(parsed.identifier)) === parsed.identifier;
+
+    if (canBeSentenceBuilderId) {
+      try {
+        const deck = await this.arenaService.getSentenceBuilderDeckById(
+          parsed.identifier,
+          requestUserId,
         );
-      }
-      return {
-        title: deck?.title || '',
-        url: parsed.url,
-        resourceType: 'sentenceBuilder' as const,
-        resourceId: String(deck?._id || parsed.identifier),
-        shareShortCode: '',
-        timeLimit: Math.max(0, Number(deck?.timeLimit || 0)),
-        showResults: deck?.showResults !== false,
-      };
-    } catch (error) {
-      if (!(error instanceof NotFoundException)) {
-        throw error;
+        if (deck?.isPublic === false) {
+          throw new ForbiddenException(
+            'Yopiq gap tuzish to‘plami uchun share havolasidan foydalaning',
+          );
+        }
+        return {
+          title: deck?.title || '',
+          url: parsed.url,
+          resourceType: 'sentenceBuilder' as const,
+          resourceId: String(deck?._id || parsed.identifier),
+          shareShortCode: '',
+          timeLimit: Math.max(0, Number(deck?.timeLimit || 0)),
+          showResults: deck?.showResults !== false,
+        };
+      } catch (error) {
+        if (!(error instanceof NotFoundException)) {
+          throw error;
+        }
       }
     }
 
