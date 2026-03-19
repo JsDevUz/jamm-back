@@ -19,6 +19,7 @@ import { AppSettingsModule } from './app-settings/app-settings.module';
 import { AppAccessGuard } from './auth/guards/app-access.guard';
 import { CommonModule } from './common/common.module';
 import { AdminModule } from './admin/admin.module';
+import { LinkPreviewModule } from './link-preview/link-preview.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { AdminModule } from './admin/admin.module';
     ArticlesModule,
     AppSettingsModule,
     AdminModule,
+    LinkPreviewModule,
   ],
   providers: [
     {

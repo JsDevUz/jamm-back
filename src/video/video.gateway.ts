@@ -627,6 +627,69 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
   }
 
+  @SubscribeMessage('screen-offer')
+  handleScreenOffer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { targetId: string; sdp: any },
+  ) {
+    this.rateLimiter.take(`video:screen-offer:${client.id}`, 600, 60_000);
+    const targetId =
+      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || targetId === client.id) {
+      return;
+    }
+    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
+    if (!sharedRoom) {
+      return;
+    }
+    this.server.to(targetId).emit('screen-offer', {
+      senderId: client.id,
+      sdp: data.sdp,
+    });
+  }
+
+  @SubscribeMessage('screen-answer')
+  handleScreenAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { targetId: string; sdp: any },
+  ) {
+    this.rateLimiter.take(`video:screen-answer:${client.id}`, 600, 60_000);
+    const targetId =
+      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || targetId === client.id) {
+      return;
+    }
+    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
+    if (!sharedRoom) {
+      return;
+    }
+    this.server.to(targetId).emit('screen-answer', {
+      senderId: client.id,
+      sdp: data.sdp,
+    });
+  }
+
+  @SubscribeMessage('screen-ice-candidate')
+  handleScreenIceCandidate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { targetId: string; candidate: any },
+  ) {
+    this.rateLimiter.take(`video:screen-ice:${client.id}`, 4000, 60_000);
+    const targetId =
+      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || targetId === client.id) {
+      return;
+    }
+    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
+    if (!sharedRoom) {
+      return;
+    }
+    this.server.to(targetId).emit('screen-ice-candidate', {
+      senderId: client.id,
+      candidate: data.candidate,
+    });
+  }
+
   @SubscribeMessage('screen-share-stopped')
   handleScreenShareStopped(
     @ConnectedSocket() client: Socket,
