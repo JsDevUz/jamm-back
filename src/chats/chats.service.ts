@@ -1102,6 +1102,11 @@ export class ChatsService implements OnModuleInit {
       decryptedMessage.senderId?.nickname ||
       decryptedMessage.senderId?.username ||
       'Yangi xabar';
+    const notificationImage = String(
+      chat?.isGroup
+        ? chat?.avatar || ''
+        : decryptedMessage.senderId?.avatar || '',
+    ).trim();
     const pushTargets = (chat?.members || [])
       .map((member: any) => {
         const memberId = member?._id ? member._id.toString() : member.toString();
@@ -1126,6 +1131,14 @@ export class ChatsService implements OnModuleInit {
           sound: 'default' as const,
           channelId: 'default',
           priority: 'high' as const,
+          icon: 'notification_small_icon',
+          ...(notificationImage
+            ? {
+                richContent: {
+                  image: notificationImage,
+                },
+              }
+            : {}),
           data: {
             type: 'chat_message',
             chatId: chatId,

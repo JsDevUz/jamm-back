@@ -67,6 +67,38 @@ export class AuthController {
     return path;
   }
 
+  private getMobileGoogleReturnUrl(request: ExpressRequest) {
+    const configured =
+      this.configService.get<string>('MOBILE_GOOGLE_REDIRECT_URI') ||
+      this.configService.get<string>('MOBILE_APP_SCHEME_URL') ||
+      '';
+    const requested = String(request?.query?.return_url || '').trim();
+    const fallback = configured.trim() || 'jamm://auth/google/callback';
+    const candidate = requested || fallback;
+
+    if (/^jamm:\/\/[A-Za-z0-9\-._~/?#[\]@!$&'()*+,;=%]+$/.test(candidate)) {
+      return candidate;
+    }
+
+    return fallback;
+  }
+
+  private buildGoogleErrorRedirect(request: ExpressRequest, message: string) {
+    const mobileReturnUrl = extractCookieValue(
+      request?.headers?.cookie || '',
+      'jamm_google_oauth_return',
+    );
+
+    if (mobileReturnUrl && mobileReturnUrl.startsWith('jamm://')) {
+      const separator = mobileReturnUrl.includes('?') ? '&' : '?';
+      return `${mobileReturnUrl}${separator}google_error=${encodeURIComponent(message)}`;
+    }
+
+    return this.buildFrontendRedirectUrl(
+      `/login?google_error=${encodeURIComponent(message)}`,
+    );
+  }
+
   private isAppUnlocked(request: ExpressRequest, user: any) {
     if (!user?.appLockEnabled) {
       return true;
@@ -167,20 +199,27 @@ export class AuthController {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID') || '';
     if (!clientId) {
       return res.redirect(
-        this.buildFrontendRedirectUrl(
-          `/login?google_error=${encodeURIComponent('Google auth hali sozlanmagan')}`,
-        ),
+        this.buildGoogleErrorRedirect(req, 'Google auth hali sozlanmagan'),
       );
     }
 
     const state = randomUUID();
     const redirectUri = this.buildGoogleRedirectUri(req);
+    const mobileReturnUrl = this.getMobileGoogleReturnUrl(req);
+    const isSecureCookie =
+      this.configService.get<string>('NODE_ENV') === 'production' ||
+      this.configService.get<string>('AUTH_COOKIE_SECURE') === 'true';
 
     res.cookie('jamm_google_oauth_state', state, {
       httpOnly: true,
-      secure:
-        this.configService.get<string>('NODE_ENV') === 'production' ||
-        this.configService.get<string>('AUTH_COOKIE_SECURE') === 'true',
+      secure: isSecureCookie,
+      sameSite: 'lax',
+      maxAge: 10 * 60 * 1000,
+      path: '/',
+    });
+    res.cookie('jamm_google_oauth_return', mobileReturnUrl, {
+      httpOnly: true,
+      secure: isSecureCookie,
       sameSite: 'lax',
       maxAge: 10 * 60 * 1000,
       path: '/',
@@ -202,19 +241,24 @@ export class AuthController {
   async googleCallback(@Request() req, @Res() res: Response) {
     const redirectUri = this.buildGoogleRedirectUri(req);
     const frontendError = (message: string) =>
-      this.buildFrontendRedirectUrl(
-        `/login?google_error=${encodeURIComponent(message)}`,
-      );
+      this.buildGoogleErrorRedirect(req, message);
 
     try {
       const stateCookie = extractCookieValue(
         req?.headers?.cookie || '',
         'jamm_google_oauth_state',
       );
+      const mobileReturnUrl = extractCookieValue(
+        req?.headers?.cookie || '',
+        'jamm_google_oauth_return',
+      );
       const stateParam = String(req.query?.state || '');
       const code = String(req.query?.code || '');
 
       res.clearCookie('jamm_google_oauth_state', {
+        path: '/',
+      });
+      res.clearCookie('jamm_google_oauth_return', {
         path: '/',
       });
 
@@ -237,6 +281,13 @@ export class AuthController {
         APP_UNLOCK_COOKIE_NAME,
         buildAppUnlockCookieOptions(this.configService),
       );
+
+      if (mobileReturnUrl && mobileReturnUrl.startsWith('jamm://')) {
+        const separator = mobileReturnUrl.includes('?') ? '&' : '?';
+        return res.redirect(
+          `${mobileReturnUrl}${separator}access_token=${encodeURIComponent(data.access_token)}`,
+        );
+      }
 
       return res.redirect(this.buildFrontendRedirectUrl('/chats'));
     } catch (error) {

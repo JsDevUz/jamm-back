@@ -8,6 +8,10 @@ type PushMessage = {
   sound?: 'default' | null;
   channelId?: string;
   priority?: 'default' | 'normal' | 'high';
+  icon?: string;
+  richContent?: {
+    image: string;
+  };
 };
 
 @Injectable()
