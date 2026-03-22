@@ -1124,6 +1124,8 @@ export class ChatsService implements OnModuleInit {
             ? `${chat.name || 'Guruh'}: ${decryptedMessage.content || 'Yangi xabar'}`
             : decryptedMessage.content || 'Yangi xabar',
           sound: 'default' as const,
+          channelId: 'default',
+          priority: 'high' as const,
           data: {
             type: 'chat_message',
             chatId: chatId,

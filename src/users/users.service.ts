@@ -311,8 +311,8 @@ export class UsersService {
       throw new BadRequestException('Push token topilmadi');
     }
 
-    await this.userModel.updateOne(
-      { _id: userId },
+    await this.userModel.updateMany(
+      {},
       {
         $pull: { pushTokens: { token } },
       },

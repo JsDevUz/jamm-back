@@ -6,6 +6,8 @@ type PushMessage = {
   body: string;
   data?: Record<string, unknown>;
   sound?: 'default' | null;
+  channelId?: string;
+  priority?: 'default' | 'normal' | 'high';
 };
 
 @Injectable()
