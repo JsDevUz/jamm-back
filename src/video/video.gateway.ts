@@ -31,15 +31,18 @@ interface KnockEntry {
 
 interface RoomInfo {
   peers: Map<string, string>; // socketId -> displayName
+  peerUsers: Map<string, string>; // socketId -> userId
   isPrivate: boolean;
   title: string;
   participantLimit: number;
   creatorSocketId: string;
   creatorUserId?: string;
   knockQueue: Map<string, KnockEntry>;
+  disconnectTimers: Map<string, NodeJS.Timeout>;
 }
 
 const ROOM_ID_PATTERN = /^[a-zA-Z0-9_-]{4,128}$/;
+const DISCONNECT_GRACE_MS = 7000;
 
 @WebSocketGateway({
   cors: { origin: getAllowedOrigins(), methods: ['GET', 'POST'], credentials: true },
@@ -84,6 +87,61 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private isSocketInRoom(room: RoomInfo | undefined, socketId: string): boolean {
     return Boolean(room?.peers.has(socketId));
+  }
+
+  private getSocketUserId(client: Socket): string {
+    return String(client.data?.user?._id || '');
+  }
+
+  private clearDisconnectTimer(room: RoomInfo, socketId: string) {
+    const timer = room.disconnectTimers.get(socketId);
+    if (timer) {
+      clearTimeout(timer);
+      room.disconnectTimers.delete(socketId);
+    }
+  }
+
+  private removePeerFromRoom(room: RoomInfo, roomId: string, socketId: string) {
+    this.clearDisconnectTimer(room, socketId);
+    room.peers.delete(socketId);
+    room.peerUsers.delete(socketId);
+    if (room.creatorSocketId === socketId) {
+      room.creatorSocketId = '';
+    }
+    if (room.peers.size === 0) {
+      this.rooms.delete(roomId);
+    }
+  }
+
+  private replaceExistingPeerSocket(
+    room: RoomInfo,
+    roomId: string,
+    userId: string,
+    nextSocketId: string,
+  ) {
+    if (!userId) {
+      return;
+    }
+
+    const existingSocketId = Array.from(room.peerUsers.entries()).find(
+      ([socketId, knownUserId]) =>
+        socketId !== nextSocketId && knownUserId === userId,
+    )?.[0];
+
+    if (!existingSocketId) {
+      return;
+    }
+
+    this.clearDisconnectTimer(room, existingSocketId);
+    room.peers.delete(existingSocketId);
+    room.peerUsers.delete(existingSocketId);
+
+    if (room.creatorSocketId === existingSocketId) {
+      room.creatorSocketId = nextSocketId;
+    }
+
+    const previousSocket = this.server.sockets.sockets.get(existingSocketId);
+    previousSocket?.leave(roomId);
   }
 
   private findSharedRoomForPeers(
@@ -144,12 +202,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const room: RoomInfo = {
       peers: new Map(),
+      peerUsers: new Map(),
       isPrivate: true,
       title: this.sanitizeRoomTitle(chat.name) || 'Private meet',
       participantLimit: 2,
       creatorSocketId: '',
       creatorUserId: String(chat.videoCallCreatorId),
       knockQueue: new Map(),
+      disconnectTimers: new Map(),
     };
 
     this.rooms.set(roomId, room);
@@ -193,9 +253,23 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`[Video] disconnected: ${client.id}`);
     this.rooms.forEach((room, roomId) => {
       if (room.peers.has(client.id)) {
-        room.peers.delete(client.id);
-        client.to(roomId).emit('peer-left', { peerId: client.id });
-        if (room.peers.size === 0) this.rooms.delete(roomId);
+        this.clearDisconnectTimer(room, client.id);
+        const userId = room.peerUsers.get(client.id) || this.getSocketUserId(client);
+        const timer = setTimeout(() => {
+          const currentPeerUserId = room.peerUsers.get(client.id);
+          if (
+            !room.peers.has(client.id) ||
+            (userId && currentPeerUserId && currentPeerUserId !== userId)
+          ) {
+            room.disconnectTimers.delete(client.id);
+            return;
+          }
+
+          this.removePeerFromRoom(room, roomId, client.id);
+          this.server.to(roomId).emit('peer-left', { peerId: client.id });
+        }, DISCONNECT_GRACE_MS);
+
+        room.disconnectTimers.set(client.id, timer);
       }
       const knockEntries = Array.from(room.knockQueue.entries());
       const matchingKnockEntry = knockEntries.find(
@@ -257,21 +331,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      const previousCreatorSocketId = existingRoom.creatorSocketId;
-      if (
-        previousCreatorSocketId &&
-        previousCreatorSocketId !== client.id &&
-        existingRoom.peers.has(previousCreatorSocketId)
-      ) {
-        existingRoom.peers.delete(previousCreatorSocketId);
-        client.to(roomId).emit('peer-left', { peerId: previousCreatorSocketId });
-        const previousCreatorSocket = this.server.sockets.sockets.get(
-          previousCreatorSocketId,
-        );
-        previousCreatorSocket?.leave(roomId);
-      }
-
       existingRoom.creatorSocketId = client.id;
+      this.replaceExistingPeerSocket(existingRoom, roomId, String(userId), client.id);
       this.admitPeer(client, roomId, displayName, existingRoom);
       client.emit('room-created', {
         roomId,
@@ -315,12 +376,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       this.rooms.set(roomId, {
         peers: new Map([[client.id, displayName]]),
+        peerUsers: new Map([[client.id, String(userId)]]),
         isPrivate,
         title,
         participantLimit,
         creatorSocketId: client.id,
         creatorUserId: userId,
         knockQueue: new Map(),
+        disconnectTimers: new Map(),
       });
 
       client.join(roomId);
@@ -363,6 +426,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
       return;
     }
+
+    this.replaceExistingPeerSocket(room, roomId, userId, client.id);
 
     if (room.peers.size >= room.participantLimit) {
       client.emit('error', {
@@ -431,6 +496,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // Add to room
     room.peers.set(client.id, displayName);
+    room.peerUsers.set(client.id, this.getSocketUserId(client));
+    this.clearDisconnectTimer(room, client.id);
     client.join(roomId);
   }
 
@@ -604,9 +671,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const { roomId } = data;
     const room = this.rooms.get(roomId);
     if (room?.peers.has(client.id) || room?.knockQueue.has(client.id)) {
-      room.peers.delete(client.id);
+      if (room.peers.has(client.id)) {
+        this.removePeerFromRoom(room, roomId, client.id);
+      }
       room.knockQueue.delete(client.id);
-      if (room.peers.size === 0) this.rooms.delete(roomId);
     } else {
       return;
     }
@@ -812,7 +880,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Notify others
     client.to(data.roomId).emit('peer-left', { peerId: data.peerId });
     // Remove from room
-    room.peers.delete(data.peerId);
+    this.removePeerFromRoom(room, data.roomId, data.peerId);
     // Force leave the socket from the room
     const kickedSocket = this.server.sockets.sockets.get(data.peerId);
     if (kickedSocket) kickedSocket.leave(data.roomId);
