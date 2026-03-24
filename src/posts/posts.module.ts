@@ -13,6 +13,7 @@ import {
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { EncryptionModule } from '../common/encryption/encryption.module';
 import { getJwtSecret } from '../auth/auth-cookie.util';
+import { PostsGateway } from './posts.gateway';
 
 @Module({
   imports: [
@@ -32,7 +33,7 @@ import { getJwtSecret } from '../auth/auth-cookie.util';
     }),
     EncryptionModule,
   ],
-  providers: [PostsService],
+  providers: [PostsService, PostsGateway],
   controllers: [PostsController],
   exports: [PostsService],
 })

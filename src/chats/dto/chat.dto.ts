@@ -105,3 +105,8 @@ export class RespondJoinRequestDto {
   @IsBoolean()
   approved: boolean;
 }
+
+export class UpdateChatPushNotificationsDto {
+  @IsBoolean()
+  enabled: boolean;
+}

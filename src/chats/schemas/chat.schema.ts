@@ -12,6 +12,11 @@ export class JoinRequest {
   createdAt: Date;
 }
 
+export class ChatMemberNotificationSetting {
+  userId: Types.ObjectId;
+  pushEnabled: boolean;
+}
+
 @Schema({ timestamps: true })
 export class Chat {
   @Prop({ required: true, default: false })
@@ -51,6 +56,17 @@ export class Chat {
     default: [],
   })
   admins: { userId: Types.ObjectId; permissions: string[] }[];
+
+  @Prop({
+    type: [
+      {
+        userId: { type: Types.ObjectId, ref: 'User' },
+        pushEnabled: { type: Boolean, default: true },
+      },
+    ],
+    default: [],
+  })
+  memberNotificationSettings: ChatMemberNotificationSetting[];
 
   @Prop()
   lastMessage?: string;

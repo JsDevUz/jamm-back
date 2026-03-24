@@ -78,6 +78,7 @@ export class UsersController {
       level: obj.level,
       premiumStatus: obj.premiumStatus,
       premiumExpiresAt: obj.premiumExpiresAt,
+      disableGroupInvites: Boolean(obj.disableGroupInvites),
       appLockEnabled: Boolean(obj.appLockEnabled),
       isOnboardingCompleted: obj.isOnboardingCompleted,
       isVerified: obj.isVerified,

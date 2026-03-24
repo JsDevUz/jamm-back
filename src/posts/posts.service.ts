@@ -29,6 +29,7 @@ import {
 } from '../common/limits/app-limits';
 import { R2Service } from '../common/services/r2.service';
 import { PostImageDto, UpsertPostDto } from './dto/post.dto';
+import { PostsGateway } from './posts.gateway';
 
 @Injectable()
 export class PostsService {
@@ -43,6 +44,7 @@ export class PostsService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private encryptionService: EncryptionService,
     private r2Service: R2Service,
+    private postsGateway: PostsGateway,
   ) {
     this.encryptionStrategy = new ServerEncryptionStrategy(
       this.encryptionService,
@@ -376,7 +378,9 @@ export class PostsService {
       .lean()
       .exec();
 
-    return this.formatPost(populated);
+    const formattedPost = this.formatPost(populated);
+    this.postsGateway.emitPostUpdated(formattedPost);
+    return formattedPost;
   }
 
   async updatePost(postId: string, userId: string, payload: UpsertPostDto) {
@@ -652,7 +656,9 @@ export class PostsService {
       .updateOne({ _id: post._id }, { $inc: { commentsCount: 1 } })
       .exec();
     const refreshed = await this.postModel.findById(post._id).select('commentsCount').lean();
-    return { comments: Number(refreshed?.commentsCount || 0) };
+    const comments = Number(refreshed?.commentsCount || 0);
+    this.postsGateway.emitPostCommentsUpdated(postId, comments);
+    return { comments };
   }
 
   async addReply(
@@ -715,12 +721,17 @@ export class PostsService {
       .updateOne({ _id: post._id }, { $inc: { commentsCount: 1 } })
       .exec();
 
-    const repliesCount = await this.postCommentModel.countDocuments({
-      parentCommentId: parentComment._id,
-      isDeleted: false,
-    });
+    const [repliesCount, refreshed] = await Promise.all([
+      this.postCommentModel.countDocuments({
+        parentCommentId: parentComment._id,
+        isDeleted: false,
+      }),
+      this.postModel.findById(post._id).select('commentsCount').lean(),
+    ]);
+    const comments = Number(refreshed?.commentsCount || 0);
+    this.postsGateway.emitPostCommentsUpdated(postId, comments);
 
-    return { replies: repliesCount };
+    return { replies: repliesCount, comments };
   }
 
   async updateComment(
@@ -777,6 +788,7 @@ export class PostsService {
     comment.keyVersion = encrypted.keyVersion;
     await comment.save();
 
+    this.postsGateway.emitPostCommentsUpdated(postId);
     return { updated: true };
   }
 
@@ -839,6 +851,7 @@ export class PostsService {
       .updateOne({ _id: post._id }, { commentsCount: nextCommentsCount })
       .exec();
 
+    this.postsGateway.emitPostCommentsUpdated(postId, nextCommentsCount);
     return { comments: nextCommentsCount };
   }
 
@@ -946,6 +959,7 @@ export class PostsService {
       this.postEngagementModel.deleteMany({ postId: post._id }).exec(),
     ]);
 
+    this.postsGateway.emitPostDeleted(postId);
     return { deleted: true };
   }
 }

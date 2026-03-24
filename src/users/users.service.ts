@@ -528,20 +528,21 @@ export class UsersService {
     query: string,
     currentUserId: string,
   ): Promise<any[]> {
-    if (!query) return [];
+    const normalizedQuery = String(query || '').trim().replace(/^@+/, '');
+    if (!normalizedQuery) return [];
 
     const safeFields =
       '_id jammId username nickname avatar bio premiumStatus isVerified lastSeen selectedProfileDecorationId customProfileDecorationImage';
 
-    const isJammId = /^\d+$/.test(query);
+    const isJammId = /^\d+$/.test(normalizedQuery);
     const filter: any = {
       _id: { $ne: currentUserId },
     };
 
     if (isJammId) {
-      filter.jammId = Number(query);
+      filter.jammId = Number(normalizedQuery);
     } else {
-      const regex = new RegExp(query, 'i');
+      const regex = new RegExp(normalizedQuery, 'i');
       filter.$or = [{ username: regex }, { nickname: regex }];
     }
 
@@ -573,6 +574,7 @@ export class UsersService {
       phone?: string;
       avatar?: string;
       bio?: string;
+      disableGroupInvites?: boolean;
     },
   ): Promise<UserDocument | null> {
     assertMaxChars('Nickname', data.nickname, APP_TEXT_LIMITS.nicknameChars);

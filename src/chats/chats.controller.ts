@@ -25,6 +25,7 @@ import {
   RequestJoinCallDto,
   RespondJoinRequestDto,
   SendMessageDto,
+  UpdateChatPushNotificationsDto,
 } from './dto/chat.dto';
 import { UploadValidationService } from '../common/uploads/upload-validation.service';
 import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
@@ -111,11 +112,13 @@ export class ChatsController {
     @Request() req,
     @Param('id') id: string,
     @Query('before') before?: string,
+    @Query('suppressAutoRead') suppressAutoRead?: string,
   ) {
     return this.chatsService.getChatMessages(
       id,
       req.user._id.toString(),
       before,
+      suppressAutoRead === '1' || suppressAutoRead === 'true',
     );
   }
 
@@ -168,6 +171,20 @@ export class ChatsController {
     @Body() body: EditChatDto,
   ) {
     return this.chatsService.editChat(id, req.user._id.toString(), body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/push-notifications')
+  updatePushNotifications(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: UpdateChatPushNotificationsDto,
+  ) {
+    return this.chatsService.updateChatPushNotifications(
+      id,
+      req.user._id.toString(),
+      body.enabled,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

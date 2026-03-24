@@ -55,6 +55,9 @@ export class User {
   @Prop({ default: false })
   hasUsedPromo: boolean;
 
+  @Prop({ default: false })
+  disableGroupInvites: boolean;
+
   @Prop({ default: '' })
   bio: string;
 

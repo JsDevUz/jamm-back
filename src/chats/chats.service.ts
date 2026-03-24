@@ -284,10 +284,15 @@ export class ChatsService implements OnModuleInit {
     return unreadMessages.map((message: any) => String(message._id));
   }
 
-  private async ensureUsersCanJoinMoreGroups(userIds: string[]) {
+  private async ensureUsersCanJoinMoreGroups(
+    userIds: string[],
+    options?: { respectDisableGroupInvites?: boolean },
+  ) {
+    const respectDisableGroupInvites =
+      options?.respectDisableGroupInvites !== false;
     const users = await this.userModel
       .find({ _id: { $in: userIds.map((id) => new Types.ObjectId(id)) } })
-      .select('_id username premiumStatus')
+      .select('_id username premiumStatus disableGroupInvites')
       .lean()
       .exec();
 
@@ -299,9 +304,12 @@ export class ChatsService implements OnModuleInit {
         await this.appSettingsService.getOfficialProfileByUsername(
           targetUser?.username,
         );
-      if (officialProfile?.disableGroupInvites) {
+      if (
+        respectDisableGroupInvites &&
+        (targetUser?.disableGroupInvites || officialProfile?.disableGroupInvites)
+      ) {
         throw new ForbiddenException(
-          `${targetUser?.username || 'Rasmiy profil'} guruhga qo'shilmaydi`,
+          "Bu user guruhga qo'shishni taqiqlagan",
         );
       }
 
@@ -338,6 +346,17 @@ export class ChatsService implements OnModuleInit {
     if (!user) return user;
     const normalized = typeof user.toObject === 'function' ? user.toObject() : user;
     return this.appSettingsService.decorateUserPayload(normalized);
+  }
+
+  private getChatPushNotificationsEnabled(chat: any, userId: string) {
+    const setting = (chat?.memberNotificationSettings || []).find((entry: any) => {
+      const settingUserId = entry?.userId?._id
+        ? entry.userId._id.toString()
+        : entry?.userId?.toString?.() || String(entry?.userId || '');
+      return settingUserId === userId;
+    });
+
+    return setting?.pushEnabled !== false;
   }
 
   async getUserChats(
@@ -393,6 +412,10 @@ export class ChatsService implements OnModuleInit {
           updatedAt: chatObj.updatedAt,
           createdAt: chatObj.createdAt,
           unreadCount,
+          pushNotificationsEnabled: this.getChatPushNotificationsEnabled(
+            chatObj,
+            userId,
+          ),
         };
       }),
     );
@@ -780,6 +803,41 @@ export class ChatsService implements OnModuleInit {
     return chat;
   }
 
+  async updateChatPushNotifications(
+    chatId: string,
+    userId: string,
+    enabled: boolean,
+  ) {
+    const chat = await this.chatModel.findOne({
+      _id: chatId,
+      members: new Types.ObjectId(userId),
+    });
+
+    if (!chat) {
+      throw new NotFoundException("Chat topilmadi yoki huquq yo'q");
+    }
+
+    const existingSetting = (chat.memberNotificationSettings || []).find(
+      (entry: any) => entry?.userId?.toString() === userId,
+    );
+
+    if (existingSetting) {
+      existingSetting.pushEnabled = enabled;
+    } else {
+      chat.memberNotificationSettings = [
+        ...(chat.memberNotificationSettings || []),
+        {
+          userId: new Types.ObjectId(userId),
+          pushEnabled: enabled,
+        } as any,
+      ];
+    }
+
+    await chat.save();
+
+    return { enabled };
+  }
+
   async previewGroup(slugOrId: string) {
     const isJammId = /^\d{6}$/.test(slugOrId);
     let query: any = { privateurl: slugOrId };
@@ -910,7 +968,9 @@ export class ChatsService implements OnModuleInit {
       if (officialProfile?.disableGroupInvites) {
         throw new ForbiddenException('Rasmiy profillar guruhga qo‘shilmaydi');
       }
-      await this.ensureUsersCanJoinMoreGroups([userId]);
+      await this.ensureUsersCanJoinMoreGroups([userId], {
+        respectDisableGroupInvites: false,
+      });
       chat.members.push(userObjectId);
       await chat.save();
     }
@@ -922,11 +982,12 @@ export class ChatsService implements OnModuleInit {
     chatId: string,
     userId: string,
     before?: string,
+    suppressAutoRead = false,
   ): Promise<any> {
     const chat = await this.getChat(chatId, userId);
     const strategy = this.getEncryptionStrategy(chat);
 
-    if (!before) {
+    if (!before && !suppressAutoRead) {
       const unreadMessageIds = await this.getUnreadMessageIds(chatId, userId);
       if (unreadMessageIds.length > 0) {
         await this.markMessagesAsRead(chatId, userId, unreadMessageIds);
@@ -1110,7 +1171,13 @@ export class ChatsService implements OnModuleInit {
     const pushTargets = (chat?.members || [])
       .map((member: any) => {
         const memberId = member?._id ? member._id.toString() : member.toString();
-        return memberId === senderId ? null : memberId;
+        if (memberId === senderId) {
+          return null;
+        }
+
+        return this.getChatPushNotificationsEnabled(chat, memberId)
+          ? memberId
+          : null;
       })
       .filter(Boolean) as string[];
 

@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsOptional,
   IsString,
   MinLength,
@@ -45,4 +46,8 @@ export class UpdateProfileDto {
     message: `Haqida (Bio) ko'pi bilan ${APP_TEXT_LIMITS.bioChars} ta belgidan iborat bo'lishi kerak`,
   })
   bio?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  disableGroupInvites?: boolean;
 }

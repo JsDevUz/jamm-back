@@ -103,7 +103,9 @@ export class AppSettingsService {
       officialBadgeLabel: officialProfile?.badgeLabel || null,
       hidePresence: officialProfile?.hidePresence ?? false,
       disableCalls: officialProfile?.disableCalls ?? false,
-      disableGroupInvites: officialProfile?.disableGroupInvites ?? false,
+      disableGroupInvites:
+        Boolean(user.disableGroupInvites) ||
+        Boolean(officialProfile?.disableGroupInvites),
     };
   }
 
@@ -121,7 +123,9 @@ export class AppSettingsService {
         officialBadgeLabel: officialProfile?.badgeLabel || null,
         hidePresence: officialProfile?.hidePresence ?? false,
         disableCalls: officialProfile?.disableCalls ?? false,
-        disableGroupInvites: officialProfile?.disableGroupInvites ?? false,
+        disableGroupInvites:
+          Boolean(user?.disableGroupInvites) ||
+          Boolean(officialProfile?.disableGroupInvites),
       };
     });
   }
