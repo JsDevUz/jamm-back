@@ -89,6 +89,22 @@ export class CoursesController {
     return basename(String(assetKey || '').split('?')[0]);
   }
 
+  private getLessonManifestAssetKey(media: any) {
+    const candidates = [
+      media?.videoUrl,
+      media?.fileUrl,
+      ...(Array.isArray(media?.streamAssets) ? media.streamAssets : []),
+    ]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+
+    return (
+      candidates.find((item) => item.toLowerCase().endsWith('.m3u8')) ||
+      candidates[0] ||
+      ''
+    );
+  }
+
   private buildProtectedHlsKeyUrl(
     courseId: string,
     lessonId: string,
@@ -502,7 +518,8 @@ export class CoursesController {
       mediaItems.find(
         (item: any) =>
           item?._id?.toString?.() === mediaId ||
-          String(item?.id || '') === mediaId,
+          String(item?.id || '') === mediaId ||
+          String(item?.mediaId || '') === mediaId,
       ) ||
       mediaItems[0] ||
       null;
@@ -1124,9 +1141,11 @@ export class CoursesController {
       { expiresIn: '2h' },
     );
 
+    const manifestAssetKey = this.getLessonManifestAssetKey(media);
     const isHlsLesson =
-      media.streamType === 'hls' || media.videoUrl?.endsWith('.m3u8');
-    const manifestName = this.getAssetFileName(media.videoUrl);
+      media.streamType === 'hls' ||
+      String(manifestAssetKey || '').toLowerCase().endsWith('.m3u8');
+    const manifestName = this.getAssetFileName(manifestAssetKey) || 'master.m3u8';
     const mediaQuery = mediaId ? `&mediaId=${encodeURIComponent(mediaId)}` : '';
 
     return {
@@ -1170,7 +1189,11 @@ export class CoursesController {
       mediaId,
     );
 
-    const assetKey = [media.videoUrl, ...(media.streamAssets || [])].find(
+    const assetKey = [
+      media.videoUrl,
+      media.fileUrl,
+      ...(media.streamAssets || []),
+    ].find(
       (key: string) => this.getAssetFileName(key) === asset,
     );
     if (!assetKey) {
