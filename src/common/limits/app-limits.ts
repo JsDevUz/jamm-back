@@ -35,7 +35,7 @@ export const APP_LIMITS = {
   testShareLinksPerTest: { ordinary: 2, premium: 4 },
   testsPerDeck: { ordinary: 30, premium: 50 },
   flashcardsCreated: { ordinary: 30, premium: 100 },
-  flashcardsPerDeck: { ordinary: 30, premium: 50 },
+  flashcardsPerDeck: { ordinary: 30, premium: 100 },
   flashcardDeckPageSize: 20,
   sentenceBuildersCreated: { ordinary: 30, premium: 100 },
   sentenceBuilderShareLinksPerDeck: { ordinary: 2, premium: 4 },
