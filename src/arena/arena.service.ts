@@ -525,9 +525,26 @@ export class ArenaService {
     return decks;
   }
 
-  private serializeFlashcardDeck(deck: any) {
+  private serializeFlashcardDeck(
+    deck: any,
+    options: { includeCards?: boolean } = {},
+  ) {
+    const { includeCards = false } = options;
     const { __v, ...safeDeck } = deck?.toObject ? deck.toObject() : deck;
-    return safeDeck;
+    const cardCount = Array.isArray(safeDeck?.cards) ? safeDeck.cards.length : 0;
+
+    if (includeCards) {
+      return {
+        ...safeDeck,
+        cardCount,
+      };
+    }
+
+    const { cards, ...deckWithoutCards } = safeDeck;
+    return {
+      ...deckWithoutCards,
+      cardCount,
+    };
   }
 
   private serializeFlashcardFolder(folder: any, decks: any[] = []) {
@@ -830,13 +847,18 @@ export class ArenaService {
   /* ---- TESTS ---- */
 
   async createTest(userId: string, data: any): Promise<TestDocument> {
-    if (data.questions && data.questions.length > APP_LIMITS.testsPerDeck) {
+    const user = await this.usersService.findById(userId);
+    const maxQuestionsPerDeck = getTierLimit(
+      APP_LIMITS.testsPerDeck,
+      user?.premiumStatus,
+    );
+
+    if (data.questions && data.questions.length > maxQuestionsPerDeck) {
       throw new BadRequestException(
-        `Testda savollar soni ${APP_LIMITS.testsPerDeck} tadan oshmasligi kerak`,
+        `Testda savollar soni ${maxQuestionsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
-    const user = await this.usersService.findById(userId);
     const limit = getTierLimit(APP_LIMITS.testsCreated, user?.premiumStatus);
 
     const count = await this.testModel.countDocuments({
@@ -891,9 +913,15 @@ export class ArenaService {
       throw new ForbiddenException("Faqat test yaratuvchisi uni tahrirlay oladi");
     }
 
-    if (data.questions && data.questions.length > APP_LIMITS.testsPerDeck) {
+    const user = await this.usersService.findById(userId);
+    const maxQuestionsPerDeck = getTierLimit(
+      APP_LIMITS.testsPerDeck,
+      user?.premiumStatus,
+    );
+
+    if (data.questions && data.questions.length > maxQuestionsPerDeck) {
       throw new BadRequestException(
-        `Testda savollar soni ${APP_LIMITS.testsPerDeck} tadan oshmasligi kerak`,
+        `Testda savollar soni ${maxQuestionsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
@@ -1419,13 +1447,18 @@ export class ArenaService {
     userId: string,
     data: any,
   ): Promise<FlashcardDeckDocument> {
-    if (data.cards && data.cards.length > APP_LIMITS.flashcardsPerDeck) {
+    const user = await this.usersService.findById(userId);
+    const maxCardsPerDeck = getTierLimit(
+      APP_LIMITS.flashcardsPerDeck,
+      user?.premiumStatus,
+    );
+
+    if (data.cards && data.cards.length > maxCardsPerDeck) {
       throw new BadRequestException(
-        `Lug‘atda so‘zlar soni ${APP_LIMITS.flashcardsPerDeck} tadan oshmasligi kerak`,
+        `Lug‘atda so‘zlar soni ${maxCardsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
-    const user = await this.usersService.findById(userId);
     const limit = getTierLimit(
       APP_LIMITS.flashcardsCreated,
       user?.premiumStatus,
@@ -1472,6 +1505,12 @@ export class ArenaService {
       throw new ForbiddenException("Faqat lug'at yaratuvchisi uni tahrirlay oladi");
     }
 
+    const user = await this.usersService.findById(userId);
+    const maxCardsPerDeck = getTierLimit(
+      APP_LIMITS.flashcardsPerDeck,
+      user?.premiumStatus,
+    );
+
     const { title, cards } = this.validateFlashcardPayload(data);
     const folder = await this.ensureOwnedFlashcardFolder(data?.folderId, userId);
 
@@ -1483,9 +1522,9 @@ export class ArenaService {
       throw new BadRequestException("Kamida bitta to'g'ri karta kiriting");
     }
 
-    if (cards.length > APP_LIMITS.flashcardsPerDeck) {
+    if (cards.length > maxCardsPerDeck) {
       throw new BadRequestException(
-        `Lug‘atda so‘zlar soni ${APP_LIMITS.flashcardsPerDeck} tadan oshmasligi kerak`,
+        `Lug‘atda so‘zlar soni ${maxCardsPerDeck} tadan oshmasligi kerak`,
       );
     }
 
@@ -1601,7 +1640,7 @@ export class ArenaService {
       };
     });
 
-    const safeDeck = this.serializeFlashcardDeck(deck);
+    const safeDeck = this.serializeFlashcardDeck(deck, { includeCards: true });
 
     return {
       ...safeDeck,
@@ -1969,13 +2008,18 @@ export class ArenaService {
       );
     }
 
-    if (items.length > APP_LIMITS.sentenceBuilderItemsPerDeck) {
+    const user = await this.usersService.findById(userId);
+    const maxItemsPerDeck = getTierLimit(
+      APP_LIMITS.sentenceBuilderItemsPerDeck,
+      user?.premiumStatus,
+    );
+
+    if (items.length > maxItemsPerDeck) {
       throw new BadRequestException(
-        `Bir to‘plamda ${APP_LIMITS.sentenceBuilderItemsPerDeck} tadan ortiq savol bo‘lishi mumkin emas`,
+        `Bir to‘plamda ${maxItemsPerDeck} tadan ortiq savol bo‘lishi mumkin emas`,
       );
     }
 
-    const user = await this.usersService.findById(userId);
     const limit = getTierLimit(
       APP_LIMITS.sentenceBuildersCreated,
       user?.premiumStatus,
@@ -2042,9 +2086,15 @@ export class ArenaService {
       );
     }
 
-    if (items.length > APP_LIMITS.sentenceBuilderItemsPerDeck) {
+    const user = await this.usersService.findById(userId);
+    const maxItemsPerDeck = getTierLimit(
+      APP_LIMITS.sentenceBuilderItemsPerDeck,
+      user?.premiumStatus,
+    );
+
+    if (items.length > maxItemsPerDeck) {
       throw new BadRequestException(
-        `Bir to‘plamda ${APP_LIMITS.sentenceBuilderItemsPerDeck} tadan ortiq savol bo‘lishi mumkin emas`,
+        `Bir to‘plamda ${maxItemsPerDeck} tadan ortiq savol bo‘lishi mumkin emas`,
       );
     }
 
