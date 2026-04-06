@@ -580,6 +580,41 @@ export class ArticlesService implements OnModuleInit {
     };
   }
 
+  async searchArticles(
+    query: string,
+    currentUserId?: string,
+    limit = 20,
+  ) {
+    const normalizedQuery = String(query || '').trim();
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const regex = new RegExp(normalizedQuery, 'i');
+    const cappedLimit = Math.max(1, Math.min(50, Number(limit) || 20));
+
+    const articles = await this.articleModel
+      .find({
+        isDeleted: false,
+        $or: [{ title: regex }, { excerpt: regex }, { tags: regex }],
+      })
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .limit(cappedLimit)
+      .populate(
+        'author',
+        'username nickname avatar premiumStatus jammId selectedProfileDecorationId customProfileDecorationImage',
+      )
+      .lean()
+      .exec();
+
+    const engagementMap = await this.getEngagementMap(
+      articles.map((article) => String(article._id)),
+      currentUserId,
+    );
+
+    return articles.map((article) => this.formatArticle(article, engagementMap));
+  }
+
   async getArticle(identifier: string, currentUserId?: string) {
     const article = await this.resolveArticle(identifier);
     const engagementMap = await this.getEngagementMap(

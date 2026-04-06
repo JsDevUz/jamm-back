@@ -87,6 +87,19 @@ export class ArticlesController {
     });
   }
 
+  @Get('search')
+  searchArticles(
+    @Request() req,
+    @Query('q') query?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.articlesService.searchArticles(
+      query || '',
+      req.user._id.toString(),
+      Number(limit) || 20,
+    );
+  }
+
   @Get('liked')
   getLikedArticles(@Request() req) {
     return this.articlesService.getLikedArticles(req.user._id.toString());

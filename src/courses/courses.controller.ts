@@ -714,6 +714,20 @@ export class CoursesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get('search')
+  searchCourses(
+    @Request() req,
+    @Query('q') query?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.coursesService.searchCoursesForUser(
+      query || '',
+      req.user._id.toString(),
+      Number(limit) || 20,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('liked-lessons')
   getLikedLessons(@Request() req) {
     return this.coursesService.getLikedLessons(req.user._id.toString());

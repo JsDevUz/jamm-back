@@ -1325,6 +1325,50 @@ export class CoursesService implements OnModuleInit {
     };
   }
 
+  async searchCoursesForUser(
+    query: string,
+    userId: string,
+    limit = 20,
+  ): Promise<any[]> {
+    const normalizedQuery = String(query || '').trim();
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const regex = new RegExp(normalizedQuery, 'i');
+    const cappedLimit = Math.max(1, Math.min(50, Number(limit) || 20));
+
+    const matchingOwnerIds = await this.userModel
+      .find({
+        $or: [{ username: regex }, { nickname: regex }],
+      })
+      .select('_id')
+      .limit(50)
+      .lean()
+      .exec();
+
+    const ownerIds = matchingOwnerIds.map((user) => user._id);
+
+    const courses = await this.courseModel
+      .find({
+        $or: [
+          { name: regex },
+          { description: regex },
+          ...(ownerIds.length > 0 ? [{ createdBy: { $in: ownerIds } }] : []),
+        ],
+      })
+      .sort({ createdAt: -1 })
+      .limit(cappedLimit)
+      .lean()
+      .exec();
+
+    const hydratedCourses = await Promise.all(
+      courses.map((course) => this.hydrateCourseCollections(course)),
+    );
+
+    return hydratedCourses.map((course) => this.sanitizeCourse(course, userId));
+  }
+
   async getCourseForUser(id: string, userId: string): Promise<any> {
     const isObjectId =
       Types.ObjectId.isValid(id) && String(new Types.ObjectId(id)) === id;
