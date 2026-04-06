@@ -80,11 +80,12 @@ export class ArticlesController {
     @Request() req,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('sort') sort?: string,
   ) {
     return this.articlesService.getLatestArticles(req.user._id.toString(), {
       page: Number(page) || 1,
       limit: Number(limit) || APP_LIMITS.articleFeedPageSize,
-    });
+    }, sort === 'views' || sort === 'likes' || sort === 'comments' ? sort : 'newest');
   }
 
   @Get('search')

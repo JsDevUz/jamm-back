@@ -37,6 +37,8 @@ type ArticlePayload = {
   tags?: string[];
 };
 
+type ArticleFeedSort = 'newest' | 'views' | 'likes' | 'comments';
+
 @Injectable()
 export class ArticlesService implements OnModuleInit {
   constructor(
@@ -268,6 +270,37 @@ export class ArticlesService implements OnModuleInit {
         },
       ]),
     );
+  }
+
+  private buildArticleFeedSort(sort?: string): [string, 1 | -1][] {
+    const normalizedSort = String(sort || 'newest').trim().toLowerCase() as ArticleFeedSort;
+
+    switch (normalizedSort) {
+      case 'views':
+        return [
+          ['viewsCount', -1],
+          ['publishedAt', -1],
+          ['createdAt', -1],
+        ];
+      case 'likes':
+        return [
+          ['likesCount', -1],
+          ['publishedAt', -1],
+          ['createdAt', -1],
+        ];
+      case 'comments':
+        return [
+          ['commentsCount', -1],
+          ['publishedAt', -1],
+          ['createdAt', -1],
+        ];
+      case 'newest':
+      default:
+        return [
+          ['publishedAt', -1],
+          ['createdAt', -1],
+        ];
+    }
   }
 
   private formatArticle(
@@ -548,13 +581,15 @@ export class ArticlesService implements OnModuleInit {
       page: 1,
       limit: APP_LIMITS.articleFeedPageSize,
     },
+    sort: ArticleFeedSort = 'newest',
   ) {
     const skip = (pagination.page - 1) * pagination.limit;
+    const sortQuery = this.buildArticleFeedSort(sort);
 
     const [articles, total] = await Promise.all([
       this.articleModel
         .find({ isDeleted: false })
-        .sort({ publishedAt: -1, createdAt: -1 })
+        .sort(sortQuery)
         .skip(skip)
         .limit(pagination.limit)
         .populate(

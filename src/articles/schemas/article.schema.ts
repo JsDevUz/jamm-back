@@ -52,3 +52,5 @@ export const ArticleSchema = SchemaFactory.createForClass(Article);
 ArticleSchema.index({ isDeleted: 1, publishedAt: -1, createdAt: -1 });
 ArticleSchema.index({ author: 1, isDeleted: 1, publishedAt: -1, createdAt: -1 });
 ArticleSchema.index({ isDeleted: 1, likesCount: -1, publishedAt: -1, createdAt: -1 });
+ArticleSchema.index({ isDeleted: 1, viewsCount: -1, publishedAt: -1, createdAt: -1 });
+ArticleSchema.index({ isDeleted: 1, commentsCount: -1, publishedAt: -1, createdAt: -1 });
