@@ -29,6 +29,79 @@ interface KnockEntry {
   socket: Socket;
 }
 
+interface WhiteboardPoint {
+  x: number;
+  y: number;
+}
+
+type WhiteboardTool = 'pen' | 'eraser' | 'text';
+type WhiteboardTabType = 'board' | 'pdf';
+
+interface WhiteboardStroke {
+  id: string;
+  tool: WhiteboardTool;
+  color: string;
+  size: number;
+  points: WhiteboardPoint[];
+  text?: string;
+  createdAt: number;
+}
+
+interface WhiteboardPdfPageState {
+  pageNumber: number;
+  strokes: WhiteboardStroke[];
+  undoStack: WhiteboardStroke[][];
+  redoStack: WhiteboardStroke[][];
+}
+
+interface WhiteboardBoardTab {
+  id: string;
+  type: 'board';
+  title: string;
+  strokes: WhiteboardStroke[];
+  undoStack: WhiteboardStroke[][];
+  redoStack: WhiteboardStroke[][];
+}
+
+interface WhiteboardPdfTab {
+  id: string;
+  type: 'pdf';
+  title: string;
+  fileUrl: string;
+  fileName: string;
+  fileSize: number;
+  scrollRatio: number;
+  zoom: number;
+  viewportPageNumber: number;
+  viewportPageOffsetRatio: number;
+  viewportLeftRatio: number;
+  selectedPagesMode: 'all' | 'custom';
+  selectedPages: number[];
+  pages: WhiteboardPdfPageState[];
+}
+
+interface WhiteboardPdfLibraryItem {
+  id: string;
+  title: string;
+  fileUrl: string;
+  fileName: string;
+  fileSize: number;
+  createdAt: number;
+}
+
+type WhiteboardTab = WhiteboardBoardTab | WhiteboardPdfTab;
+type WhiteboardHistoryTarget = WhiteboardBoardTab | WhiteboardPdfPageState;
+
+interface WhiteboardState {
+  isActive: boolean;
+  ownerPeerId: string;
+  ownerUserId?: string;
+  activeTabId: string;
+  tabs: WhiteboardTab[];
+  pdfLibrary: WhiteboardPdfLibraryItem[];
+  updatedAt: number;
+}
+
 interface RoomInfo {
   peers: Map<string, string>; // socketId -> displayName
   peerUsers: Map<string, string>; // socketId -> userId
@@ -39,13 +112,56 @@ interface RoomInfo {
   creatorUserId?: string;
   knockQueue: Map<string, KnockEntry>;
   disconnectTimers: Map<string, NodeJS.Timeout>;
+  whiteboard: WhiteboardState;
 }
 
 const ROOM_ID_PATTERN = /^[a-zA-Z0-9_-]{4,128}$/;
 const DISCONNECT_GRACE_MS = 7000;
+const WHITEBOARD_STROKE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,80}$/;
+const WHITEBOARD_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+const WHITEBOARD_MIN_BRUSH_SIZE = 2;
+const WHITEBOARD_MAX_BRUSH_SIZE = 24;
+const WHITEBOARD_MAX_STROKES = 320;
+const WHITEBOARD_MAX_POINTS_PER_STROKE = 1200;
+const WHITEBOARD_APPEND_BATCH_LIMIT = 24;
+const WHITEBOARD_BOARD_TAB_ID = 'board';
+const WHITEBOARD_TAB_ID_PATTERN = /^[a-zA-Z0-9_-]{1,80}$/;
+const WHITEBOARD_MAX_TABS = 6;
+const WHITEBOARD_MAX_PAGE_STATES = 120;
+const WHITEBOARD_MAX_FILE_NAME_CHARS = 120;
+const WHITEBOARD_MAX_FILE_URL_CHARS = 2048;
+const WHITEBOARD_MAX_LIBRARY_ITEMS = 24;
+const WHITEBOARD_MIN_ZOOM = 0.5;
+const WHITEBOARD_MAX_ZOOM = 3;
+const WHITEBOARD_MAX_HISTORY_ENTRIES = 48;
+const WHITEBOARD_MAX_SELECTED_PAGES = 240;
+const WHITEBOARD_MAX_TEXT_CHARS = 240;
+
+const createWhiteboardBoardTab = (): WhiteboardBoardTab => ({
+  id: WHITEBOARD_BOARD_TAB_ID,
+  type: 'board',
+  title: 'board',
+  strokes: [],
+  undoStack: [],
+  redoStack: [],
+});
+
+const createDefaultWhiteboardState = (): WhiteboardState => ({
+  isActive: false,
+  ownerPeerId: '',
+  ownerUserId: '',
+  activeTabId: WHITEBOARD_BOARD_TAB_ID,
+  tabs: [createWhiteboardBoardTab()],
+  pdfLibrary: [],
+  updatedAt: Date.now(),
+});
 
 @WebSocketGateway({
-  cors: { origin: getAllowedOrigins(), methods: ['GET', 'POST'], credentials: true },
+  cors: {
+    origin: getAllowedOrigins(),
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
   namespace: '/video',
 })
 export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -85,7 +201,453 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .slice(0, APP_TEXT_LIMITS.meetTitleChars);
   }
 
-  private isSocketInRoom(room: RoomInfo | undefined, socketId: string): boolean {
+  private sanitizeWhiteboardPoint(rawValue: unknown): WhiteboardPoint | null {
+    if (!rawValue || typeof rawValue !== 'object') {
+      return null;
+    }
+
+    const point = rawValue as Record<string, unknown>;
+    const x = Number(point.x);
+    const y = Number(point.y);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null;
+    }
+
+    return {
+      x: Math.min(1, Math.max(0, x)),
+      y: Math.min(1, Math.max(0, y)),
+    };
+  }
+
+  private sanitizeWhiteboardPoints(
+    rawValue: unknown,
+    limit = WHITEBOARD_APPEND_BATCH_LIMIT,
+  ): WhiteboardPoint[] {
+    if (!Array.isArray(rawValue)) {
+      return [];
+    }
+
+    return rawValue
+      .slice(0, limit)
+      .map((point) => this.sanitizeWhiteboardPoint(point))
+      .filter((point): point is WhiteboardPoint => Boolean(point));
+  }
+
+  private sanitizeWhiteboardTool(rawValue: unknown): WhiteboardTool {
+    if (rawValue === 'eraser') {
+      return 'eraser';
+    }
+
+    if (rawValue === 'text') {
+      return 'text';
+    }
+
+    return 'pen';
+  }
+
+  private sanitizeWhiteboardText(rawValue: unknown): string {
+    return typeof rawValue === 'string'
+      ? rawValue.replace(/\s+$/g, '').slice(0, WHITEBOARD_MAX_TEXT_CHARS)
+      : '';
+  }
+
+  private sanitizeWhiteboardTabId(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '';
+    }
+
+    const tabId = rawValue.trim();
+    return WHITEBOARD_TAB_ID_PATTERN.test(tabId) ? tabId : '';
+  }
+
+  private sanitizeWhiteboardColor(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '#0f172a';
+    }
+
+    const nextColor = rawValue.trim();
+    return WHITEBOARD_COLOR_PATTERN.test(nextColor)
+      ? nextColor.toLowerCase()
+      : '#0f172a';
+  }
+
+  private sanitizeWhiteboardSize(rawValue: unknown): number {
+    const size = Number(rawValue);
+    if (!Number.isFinite(size)) {
+      return 4;
+    }
+
+    return Math.min(
+      WHITEBOARD_MAX_BRUSH_SIZE,
+      Math.max(WHITEBOARD_MIN_BRUSH_SIZE, Math.round(size)),
+    );
+  }
+
+  private sanitizeWhiteboardStrokeId(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '';
+    }
+
+    const strokeId = rawValue.trim();
+    return WHITEBOARD_STROKE_ID_PATTERN.test(strokeId) ? strokeId : '';
+  }
+
+  private sanitizeWhiteboardTabTitle(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '';
+    }
+
+    return rawValue
+      .replace(/[\u0000-\u001F\u007F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+  }
+
+  private sanitizeWhiteboardFileName(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '';
+    }
+
+    return rawValue
+      .replace(/[\u0000-\u001F\u007F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, WHITEBOARD_MAX_FILE_NAME_CHARS);
+  }
+
+  private sanitizeWhiteboardFileUrl(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '';
+    }
+
+    const fileUrl = rawValue.trim().slice(0, WHITEBOARD_MAX_FILE_URL_CHARS);
+    if (!fileUrl) {
+      return '';
+    }
+
+    if (
+      fileUrl.startsWith('http://') ||
+      fileUrl.startsWith('https://') ||
+      fileUrl.startsWith('/')
+    ) {
+      return fileUrl;
+    }
+
+    return '';
+  }
+
+  private sanitizeWhiteboardFileSize(rawValue: unknown): number {
+    const fileSize = Number(rawValue);
+    if (!Number.isFinite(fileSize) || fileSize < 0) {
+      return 0;
+    }
+
+    return Math.min(fileSize, APP_LIMITS.lessonMediaBytes);
+  }
+
+  private sanitizeWhiteboardScrollRatio(rawValue: unknown): number {
+    const scrollRatio = Number(rawValue);
+    if (!Number.isFinite(scrollRatio)) {
+      return 0;
+    }
+
+    return Math.min(1, Math.max(0, scrollRatio));
+  }
+
+  private sanitizeWhiteboardViewportLeftRatio(rawValue: unknown): number {
+    const leftRatio = Number(rawValue);
+    if (!Number.isFinite(leftRatio)) {
+      return 0;
+    }
+
+    return Math.min(1, Math.max(0, leftRatio));
+  }
+
+  private sanitizeWhiteboardZoom(rawValue: unknown): number {
+    const zoom = Number(rawValue);
+    if (!Number.isFinite(zoom)) {
+      return 1;
+    }
+
+    return Math.min(WHITEBOARD_MAX_ZOOM, Math.max(WHITEBOARD_MIN_ZOOM, zoom));
+  }
+
+  private sanitizeWhiteboardPageNumber(rawValue: unknown): number {
+    const pageNumber = Number(rawValue);
+    if (!Number.isFinite(pageNumber)) {
+      return 1;
+    }
+
+    return Math.min(5000, Math.max(1, Math.round(pageNumber)));
+  }
+
+  private sanitizeWhiteboardSelectedPages(rawValue: unknown): number[] {
+    if (!Array.isArray(rawValue)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        rawValue
+          .slice(0, WHITEBOARD_MAX_SELECTED_PAGES)
+          .map((pageNumber) => this.sanitizeWhiteboardPageNumber(pageNumber))
+          .filter((pageNumber) => Number.isFinite(pageNumber) && pageNumber > 0),
+      ),
+    ).sort((left, right) => left - right);
+  }
+
+  private sanitizeWhiteboardSelectedPagesMode(rawValue: unknown): 'all' | 'custom' {
+    return rawValue === 'custom' ? 'custom' : 'all';
+  }
+
+  private trimWhiteboardStrokes(strokes: WhiteboardStroke[]): WhiteboardStroke[] {
+    if (strokes.length <= WHITEBOARD_MAX_STROKES) {
+      return strokes;
+    }
+
+    return strokes.slice(strokes.length - WHITEBOARD_MAX_STROKES);
+  }
+
+  private cloneWhiteboardPoint(point: WhiteboardPoint): WhiteboardPoint {
+    return {
+      x: point.x,
+      y: point.y,
+    };
+  }
+
+  private cloneWhiteboardStroke(stroke: WhiteboardStroke): WhiteboardStroke {
+    return {
+      ...stroke,
+      points: stroke.points.map((point) => this.cloneWhiteboardPoint(point)),
+    };
+  }
+
+  private cloneWhiteboardStrokes(strokes: WhiteboardStroke[]): WhiteboardStroke[] {
+    return strokes.map((stroke) => this.cloneWhiteboardStroke(stroke));
+  }
+
+  private pushWhiteboardHistory(
+    target: WhiteboardHistoryTarget,
+    nextStrokes: WhiteboardStroke[],
+  ) {
+    target.undoStack.push(this.cloneWhiteboardStrokes(target.strokes));
+    if (target.undoStack.length > WHITEBOARD_MAX_HISTORY_ENTRIES) {
+      target.undoStack = target.undoStack.slice(
+        target.undoStack.length - WHITEBOARD_MAX_HISTORY_ENTRIES,
+      );
+    }
+
+    target.redoStack = [];
+    target.strokes = nextStrokes;
+  }
+
+  private applyWhiteboardUndo(target: WhiteboardHistoryTarget): boolean {
+    const previousStrokes = target.undoStack.pop();
+    if (!previousStrokes) {
+      return false;
+    }
+
+    target.redoStack.push(this.cloneWhiteboardStrokes(target.strokes));
+    if (target.redoStack.length > WHITEBOARD_MAX_HISTORY_ENTRIES) {
+      target.redoStack = target.redoStack.slice(
+        target.redoStack.length - WHITEBOARD_MAX_HISTORY_ENTRIES,
+      );
+    }
+
+    target.strokes = previousStrokes;
+    return true;
+  }
+
+  private applyWhiteboardRedo(target: WhiteboardHistoryTarget): boolean {
+    const nextStrokes = target.redoStack.pop();
+    if (!nextStrokes) {
+      return false;
+    }
+
+    target.undoStack.push(this.cloneWhiteboardStrokes(target.strokes));
+    if (target.undoStack.length > WHITEBOARD_MAX_HISTORY_ENTRIES) {
+      target.undoStack = target.undoStack.slice(
+        target.undoStack.length - WHITEBOARD_MAX_HISTORY_ENTRIES,
+      );
+    }
+
+    target.strokes = nextStrokes;
+    return true;
+  }
+
+  private sanitizeWhiteboardTimestamp(rawValue: unknown): number {
+    const timestamp = Number(rawValue);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return Date.now();
+    }
+
+    return Math.round(timestamp);
+  }
+
+  private upsertWhiteboardPdfLibraryItem(
+    room: RoomInfo,
+    item: WhiteboardPdfLibraryItem,
+  ) {
+    this.ensureWhiteboardState(room);
+    const nextLibrary = room.whiteboard.pdfLibrary.filter(
+      (entry) => entry.id !== item.id && entry.fileUrl !== item.fileUrl,
+    );
+    nextLibrary.push(item);
+    room.whiteboard.pdfLibrary = nextLibrary
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, WHITEBOARD_MAX_LIBRARY_ITEMS);
+  }
+
+  private ensureWhiteboardState(room: RoomInfo): WhiteboardState {
+    if (!Array.isArray(room.whiteboard.tabs) || room.whiteboard.tabs.length === 0) {
+      room.whiteboard.tabs = [createWhiteboardBoardTab()];
+    }
+
+    const boardTab = room.whiteboard.tabs.find(
+      (tab): tab is WhiteboardBoardTab => tab.type === 'board',
+    );
+
+    if (!boardTab) {
+      room.whiteboard.tabs.unshift(createWhiteboardBoardTab());
+    } else if (boardTab.id !== WHITEBOARD_BOARD_TAB_ID) {
+      boardTab.id = WHITEBOARD_BOARD_TAB_ID;
+      boardTab.undoStack = Array.isArray(boardTab.undoStack) ? boardTab.undoStack : [];
+      boardTab.redoStack = Array.isArray(boardTab.redoStack) ? boardTab.redoStack : [];
+    } else {
+      boardTab.undoStack = Array.isArray(boardTab.undoStack) ? boardTab.undoStack : [];
+      boardTab.redoStack = Array.isArray(boardTab.redoStack) ? boardTab.redoStack : [];
+    }
+
+    room.whiteboard.tabs.forEach((tab) => {
+      if (tab.type !== 'pdf') {
+        return;
+      }
+
+      tab.scrollRatio =
+        typeof tab.scrollRatio === 'number'
+          ? this.sanitizeWhiteboardScrollRatio(tab.scrollRatio)
+          : 0;
+      tab.zoom =
+        typeof tab.zoom === 'number' ? this.sanitizeWhiteboardZoom(tab.zoom) : 1;
+      tab.viewportPageNumber =
+        typeof tab.viewportPageNumber === 'number'
+          ? this.sanitizeWhiteboardPageNumber(tab.viewportPageNumber)
+          : 1;
+      tab.viewportPageOffsetRatio =
+        typeof tab.viewportPageOffsetRatio === 'number'
+          ? this.sanitizeWhiteboardScrollRatio(tab.viewportPageOffsetRatio)
+          : 0;
+      tab.viewportLeftRatio =
+        typeof tab.viewportLeftRatio === 'number'
+          ? this.sanitizeWhiteboardViewportLeftRatio(tab.viewportLeftRatio)
+          : 0;
+      tab.selectedPages = this.sanitizeWhiteboardSelectedPages(tab.selectedPages);
+      tab.selectedPagesMode =
+        this.sanitizeWhiteboardSelectedPagesMode(
+          (tab as WhiteboardPdfTab).selectedPagesMode,
+        ) === 'custom' || tab.selectedPages.length > 0
+          ? 'custom'
+          : 'all';
+      tab.pages = (Array.isArray(tab.pages) ? tab.pages : []).map((page) => ({
+        ...page,
+        undoStack: Array.isArray(page.undoStack) ? page.undoStack : [],
+        redoStack: Array.isArray(page.redoStack) ? page.redoStack : [],
+      }));
+    });
+
+    if (
+      !room.whiteboard.activeTabId ||
+      !room.whiteboard.tabs.some((tab) => tab.id === room.whiteboard.activeTabId)
+    ) {
+      room.whiteboard.activeTabId = WHITEBOARD_BOARD_TAB_ID;
+    }
+
+    if (!Array.isArray(room.whiteboard.pdfLibrary)) {
+      room.whiteboard.pdfLibrary = [];
+    }
+
+    return room.whiteboard;
+  }
+
+  private getWhiteboardBoardTab(room: RoomInfo): WhiteboardBoardTab {
+    this.ensureWhiteboardState(room);
+    let boardTab = room.whiteboard.tabs.find(
+      (tab): tab is WhiteboardBoardTab => tab.type === 'board',
+    );
+
+    if (!boardTab) {
+      boardTab = createWhiteboardBoardTab();
+      room.whiteboard.tabs.unshift(boardTab);
+    }
+
+    return boardTab;
+  }
+
+  private getWhiteboardTab(room: RoomInfo, rawTabId: unknown): WhiteboardTab | null {
+    const tabId = this.sanitizeWhiteboardTabId(rawTabId) || WHITEBOARD_BOARD_TAB_ID;
+    this.ensureWhiteboardState(room);
+
+    return room.whiteboard.tabs.find((tab) => tab.id === tabId) || null;
+  }
+
+  private getWhiteboardPdfTab(room: RoomInfo, rawTabId: unknown): WhiteboardPdfTab | null {
+    const tab = this.getWhiteboardTab(room, rawTabId);
+    if (!tab || tab.type !== 'pdf') {
+      return null;
+    }
+
+    return tab;
+  }
+
+  private getWhiteboardPdfPage(
+    tab: WhiteboardPdfTab,
+    rawPageNumber: unknown,
+    createIfMissing = false,
+  ): WhiteboardPdfPageState | null {
+    const pageNumber = this.sanitizeWhiteboardPageNumber(rawPageNumber);
+    let pageState =
+      tab.pages.find((page) => page.pageNumber === pageNumber) || null;
+
+    if (!pageState && createIfMissing) {
+      pageState = {
+        pageNumber,
+        strokes: [],
+        undoStack: [],
+        redoStack: [],
+      };
+      tab.pages.push(pageState);
+      if (tab.pages.length > WHITEBOARD_MAX_PAGE_STATES) {
+        tab.pages = tab.pages
+          .sort((a, b) => a.pageNumber - b.pageNumber)
+          .slice(tab.pages.length - WHITEBOARD_MAX_PAGE_STATES);
+      }
+    }
+
+    return pageState;
+  }
+
+  private getWhiteboardHistoryTarget(
+    room: RoomInfo,
+    rawTabId: unknown,
+    rawPageNumber: unknown,
+    createIfMissing = false,
+  ): WhiteboardHistoryTarget | null {
+    const tab =
+      this.getWhiteboardTab(room, rawTabId) || this.getWhiteboardBoardTab(room);
+
+    if (tab.type === 'board') {
+      return tab;
+    }
+
+    return this.getWhiteboardPdfPage(tab, rawPageNumber, createIfMissing);
+  }
+
+  private isSocketInRoom(
+    room: RoomInfo | undefined,
+    socketId: string,
+  ): boolean {
     return Boolean(room?.peers.has(socketId));
   }
 
@@ -101,12 +663,119 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  private resolveWhiteboardOwnerDisplayName(room: RoomInfo): string {
+    if (room.whiteboard.ownerPeerId) {
+      return room.peers.get(room.whiteboard.ownerPeerId) || 'Host';
+    }
+
+    if (room.whiteboard.ownerUserId) {
+      const matchedPeerId = Array.from(room.peerUsers.entries()).find(
+        ([, userId]) => userId === room.whiteboard.ownerUserId,
+      )?.[0];
+
+      if (matchedPeerId) {
+        return room.peers.get(matchedPeerId) || 'Host';
+      }
+    }
+
+    return 'Host';
+  }
+
+  private serializeWhiteboardTab(tab: WhiteboardTab): Record<string, unknown> {
+    if (tab.type === 'board') {
+      return {
+        id: tab.id,
+        type: tab.type,
+        title: tab.title,
+        strokes: tab.strokes,
+      };
+    }
+
+      return {
+        id: tab.id,
+        type: tab.type,
+        title: tab.title,
+        fileUrl: tab.fileUrl,
+        fileName: tab.fileName,
+        fileSize: tab.fileSize,
+        scrollRatio: tab.scrollRatio,
+        zoom: tab.zoom,
+        viewportPageNumber: tab.viewportPageNumber,
+        viewportPageOffsetRatio: tab.viewportPageOffsetRatio,
+        viewportLeftRatio: tab.viewportLeftRatio,
+        selectedPagesMode: tab.selectedPagesMode,
+        selectedPages: tab.selectedPages,
+        pages: tab.pages.map((page) => ({
+          pageNumber: page.pageNumber,
+          strokes: page.strokes,
+        })),
+      };
+  }
+
+  private serializeWhiteboardPdfLibraryItem(
+    item: WhiteboardPdfLibraryItem,
+  ): Record<string, unknown> {
+    return {
+      id: item.id,
+      title: item.title,
+      fileUrl: item.fileUrl,
+      fileName: item.fileName,
+      fileSize: item.fileSize,
+      createdAt: item.createdAt,
+    };
+  }
+
+  private emitWhiteboardState(target: Socket | string, room: RoomInfo) {
+    this.ensureWhiteboardState(room);
+    const payload = {
+      isActive: room.whiteboard.isActive,
+      ownerPeerId: room.whiteboard.ownerPeerId,
+      ownerDisplayName: this.resolveWhiteboardOwnerDisplayName(room),
+      activeTabId: room.whiteboard.activeTabId,
+      tabs: room.whiteboard.tabs.map((tab) => this.serializeWhiteboardTab(tab)),
+      pdfLibrary: room.whiteboard.pdfLibrary.map((item) =>
+        this.serializeWhiteboardPdfLibraryItem(item),
+      ),
+    };
+
+    if (typeof target === 'string') {
+      this.server.to(target).emit('whiteboard-state', payload);
+      return;
+    }
+
+    target.emit('whiteboard-state', payload);
+  }
+
+  private emitWhiteboardStopped(roomId: string, room: RoomInfo) {
+    this.server.to(roomId).emit('whiteboard-stopped', {
+      ownerPeerId: room.whiteboard.ownerPeerId,
+    });
+  }
+
+  private resetWhiteboard(roomId: string, room: RoomInfo, broadcast = true) {
+    const previousOwnerPeerId = room.whiteboard.ownerPeerId;
+    const shouldEmitStopped = room.whiteboard.isActive;
+    room.whiteboard = createDefaultWhiteboardState();
+
+    if (!broadcast) {
+      return;
+    }
+
+    if (shouldEmitStopped) {
+      this.server.to(roomId).emit('whiteboard-stopped', {
+        ownerPeerId: previousOwnerPeerId,
+      });
+    }
+    this.server.to(roomId).emit('whiteboard-cleared');
+  }
+
   private removePeerFromRoom(room: RoomInfo, roomId: string, socketId: string) {
     this.clearDisconnectTimer(room, socketId);
     room.peers.delete(socketId);
     room.peerUsers.delete(socketId);
     if (room.creatorSocketId === socketId) {
       room.creatorSocketId = '';
+      this.resetWhiteboard(roomId, room);
     }
     if (room.peers.size === 0) {
       this.rooms.delete(roomId);
@@ -139,6 +808,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (room.creatorSocketId === existingSocketId) {
       room.creatorSocketId = nextSocketId;
     }
+    if (room.whiteboard.ownerUserId && room.whiteboard.ownerUserId === userId) {
+      room.whiteboard.ownerPeerId = nextSocketId;
+      room.whiteboard.updatedAt = Date.now();
+    }
 
     const previousSocket = this.server.sockets.sockets.get(existingSocketId);
     previousSocket?.leave(roomId);
@@ -167,9 +840,24 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ): boolean {
     return Boolean(
       room &&
-        room.creatorSocketId === creatorSocketId &&
-        room.peers.has(targetPeerId),
+      room.creatorSocketId === creatorSocketId &&
+      room.peers.has(targetPeerId),
     );
+  }
+
+  private canManageWhiteboard(
+    room: RoomInfo | undefined,
+    client: Socket,
+  ): room is RoomInfo {
+    if (
+      !room ||
+      room.creatorSocketId !== client.id ||
+      !room.peers.has(client.id)
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   private getPeerKey(client: Socket): string {
@@ -196,7 +884,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .select('name members videoCallCreatorId')
       .exec();
 
-    if (!chat || !chat.videoCallCreatorId || !this.isUserChatMember(chat, userId)) {
+    if (
+      !chat ||
+      !chat.videoCallCreatorId ||
+      !this.isUserChatMember(chat, userId)
+    ) {
       return null;
     }
 
@@ -210,6 +902,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       creatorUserId: String(chat.videoCallCreatorId),
       knockQueue: new Map(),
       disconnectTimers: new Map(),
+      whiteboard: createDefaultWhiteboardState(),
     };
 
     this.rooms.set(roomId, room);
@@ -254,7 +947,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.rooms.forEach((room, roomId) => {
       if (room.peers.has(client.id)) {
         this.clearDisconnectTimer(room, client.id);
-        const userId = room.peerUsers.get(client.id) || this.getSocketUserId(client);
+        const userId =
+          room.peerUsers.get(client.id) || this.getSocketUserId(client);
         const timer = setTimeout(() => {
           const currentPeerUserId = room.peerUsers.get(client.id);
           if (
@@ -332,7 +1026,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       existingRoom.creatorSocketId = client.id;
-      this.replaceExistingPeerSocket(existingRoom, roomId, String(userId), client.id);
+      this.replaceExistingPeerSocket(
+        existingRoom,
+        roomId,
+        String(userId),
+        client.id,
+      );
       this.admitPeer(client, roomId, displayName, existingRoom);
       client.emit('room-created', {
         roomId,
@@ -344,6 +1043,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         title: existingRoom.title,
         isPrivate: existingRoom.isPrivate,
       });
+      this.emitWhiteboardState(client, existingRoom);
+      if (existingRoom.whiteboard.isActive) {
+        this.emitWhiteboardState(roomId, existingRoom);
+      }
       this.notifyCreatorOfPendingKnocks(roomId, existingRoom);
       return;
     }
@@ -360,7 +1063,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       if (activeRoomsCount >= 1) {
         client.emit('error', {
-          message: "Sizda allaqachon faol meet mavjud.",
+          message: 'Sizda allaqachon faol meet mavjud.',
         });
         return;
       }
@@ -372,7 +1075,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      const participantLimit = getTierLimit(APP_LIMITS.meetParticipants, status);
+      const participantLimit = getTierLimit(
+        APP_LIMITS.meetParticipants,
+        status,
+      );
 
       this.rooms.set(roomId, {
         peers: new Map([[client.id, displayName]]),
@@ -384,6 +1090,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         creatorUserId: userId,
         knockQueue: new Map(),
         disconnectTimers: new Map(),
+        whiteboard: createDefaultWhiteboardState(),
       });
 
       client.join(roomId);
@@ -482,23 +1189,21 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     displayName: string,
     room: RoomInfo,
   ) {
-    // Send existing peers to newcomer
     const existingPeers = Array.from(room.peers.entries()).map(
       ([id, name]) => ({
         peerId: id,
         displayName: name,
       }),
     );
-    client.emit('existing-peers', { peers: existingPeers });
 
-    // Notify existing peers
-    client.to(roomId).emit('peer-joined', { peerId: client.id, displayName });
-
-    // Add to room
     room.peers.set(client.id, displayName);
     room.peerUsers.set(client.id, this.getSocketUserId(client));
     this.clearDisconnectTimer(room, client.id);
     client.join(roomId);
+
+    client.emit('existing-peers', { peers: existingPeers });
+    this.emitWhiteboardState(client, room);
+    client.to(roomId).emit('peer-joined', { peerId: client.id, displayName });
   }
 
   private emitRoomInfo(roomId: string, room: RoomInfo) {
@@ -536,7 +1241,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Notify the guest they're approved. Mic/cam are allowed by default.
     this.server
       .to(entry.socket.id)
-      .emit('knock-approved', { roomId, title: room.title, mediaLocked: false });
+      .emit('knock-approved', {
+        roomId,
+        title: room.title,
+        mediaLocked: false,
+      });
 
     // Admit them using the stored socket reference
     this.admitPeer(entry.socket, roomId, entry.displayName, room);
@@ -597,6 +1306,605 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
       }
     }
+  }
+
+  // ─── Whiteboard Relay ───────────────────────────────────────────────────────
+
+  @SubscribeMessage('whiteboard-start')
+  handleWhiteboardStart(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:start:${client.id}`, 120, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    this.ensureWhiteboardState(room);
+    room.whiteboard.isActive = true;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.activeTabId =
+      room.whiteboard.activeTabId || WHITEBOARD_BOARD_TAB_ID;
+    room.whiteboard.updatedAt = Date.now();
+
+    this.server.to(roomId).emit('whiteboard-started', {
+      ownerPeerId: room.whiteboard.ownerPeerId,
+      ownerDisplayName: this.resolveWhiteboardOwnerDisplayName(room),
+      activeTabId: room.whiteboard.activeTabId,
+    });
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-stop')
+  handleWhiteboardStop(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:stop:${client.id}`, 120, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    this.ensureWhiteboardState(room);
+    room.whiteboard.isActive = false;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+
+    this.server.to(roomId).emit('whiteboard-stopped', {
+      ownerPeerId: room.whiteboard.ownerPeerId,
+    });
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-clear')
+  handleWhiteboardClear(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { roomId: string; tabId?: string; pageNumber?: number },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:clear:${client.id}`, 120, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    if (tab.type === 'board') {
+      if (tab.strokes.length === 0) {
+        return;
+      }
+      this.pushWhiteboardHistory(tab, []);
+    } else {
+      const pageState = this.getWhiteboardPdfPage(tab, data?.pageNumber, false);
+      if (!pageState || pageState.strokes.length === 0) {
+        return;
+      }
+      this.pushWhiteboardHistory(pageState, []);
+    }
+
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.server.to(roomId).emit('whiteboard-cleared');
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-tab-activate')
+  handleWhiteboardTabActivate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; tabId?: string },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:tab-activate:${client.id}`, 600, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    const tab = this.getWhiteboardTab(room, data?.tabId);
+    if (!tab) {
+      return;
+    }
+
+    room.whiteboard.isActive = true;
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-pdf-add')
+  handleWhiteboardPdfAdd(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      libraryItemId?: string;
+      title?: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileSize?: number;
+      createdAt?: number;
+      selectedPagesMode?: 'all' | 'custom';
+      selectedPages?: number[];
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:pdf-add:${client.id}`, 120, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    const tabId = this.sanitizeWhiteboardTabId(data?.tabId);
+    const libraryItemId = this.sanitizeWhiteboardTabId(data?.libraryItemId);
+    const fileUrl = this.sanitizeWhiteboardFileUrl(data?.fileUrl);
+    const fileName = this.sanitizeWhiteboardFileName(data?.fileName);
+    const title =
+      this.sanitizeWhiteboardTabTitle(data?.title) ||
+      fileName.replace(/\.pdf$/i, '') ||
+      'PDF';
+
+    if (!tabId || !fileUrl || !fileName) {
+      return;
+    }
+
+    this.ensureWhiteboardState(room);
+    const nextTabs = room.whiteboard.tabs.filter((tab) => tab.id !== tabId);
+    const pdfTabsCount = nextTabs.filter((tab) => tab.type === 'pdf').length;
+    if (pdfTabsCount >= WHITEBOARD_MAX_TABS - 1) {
+      return;
+    }
+
+    const nextTab: WhiteboardPdfTab = {
+      id: tabId,
+      type: 'pdf',
+      title,
+      fileUrl,
+      fileName,
+      fileSize: this.sanitizeWhiteboardFileSize(data?.fileSize),
+      scrollRatio: 0,
+      zoom: 1,
+      viewportPageNumber: 1,
+      viewportPageOffsetRatio: 0,
+      viewportLeftRatio: 0,
+      selectedPages: this.sanitizeWhiteboardSelectedPages(data?.selectedPages),
+      selectedPagesMode:
+        this.sanitizeWhiteboardSelectedPagesMode(data?.selectedPagesMode) === 'custom' ||
+        this.sanitizeWhiteboardSelectedPages(data?.selectedPages).length > 0
+          ? 'custom'
+          : 'all',
+      pages: [],
+    };
+
+    this.upsertWhiteboardPdfLibraryItem(room, {
+      id: libraryItemId || tabId,
+      title,
+      fileUrl,
+      fileName,
+      fileSize: this.sanitizeWhiteboardFileSize(data?.fileSize),
+      createdAt: this.sanitizeWhiteboardTimestamp(data?.createdAt),
+    });
+    room.whiteboard.tabs = [...nextTabs, nextTab];
+    room.whiteboard.isActive = true;
+    room.whiteboard.activeTabId = tabId;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-pdf-library-add')
+  handleWhiteboardPdfLibraryAdd(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      itemId?: string;
+      title?: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileSize?: number;
+      createdAt?: number;
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:pdf-library-add:${client.id}`, 120, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    const itemId = this.sanitizeWhiteboardTabId(data?.itemId);
+    const fileUrl = this.sanitizeWhiteboardFileUrl(data?.fileUrl);
+    const fileName = this.sanitizeWhiteboardFileName(data?.fileName);
+    const title =
+      this.sanitizeWhiteboardTabTitle(data?.title) ||
+      fileName.replace(/\.pdf$/i, '') ||
+      'PDF';
+
+    if (!itemId || !fileUrl || !fileName) {
+      return;
+    }
+
+    this.upsertWhiteboardPdfLibraryItem(room, {
+      id: itemId,
+      title,
+      fileUrl,
+      fileName,
+      fileSize: this.sanitizeWhiteboardFileSize(data?.fileSize),
+      createdAt: this.sanitizeWhiteboardTimestamp(data?.createdAt),
+    });
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-tab-remove')
+  handleWhiteboardTabRemove(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string; tabId?: string },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:tab-remove:${client.id}`, 240, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) return;
+
+    const tabId = this.sanitizeWhiteboardTabId(data?.tabId);
+    if (!tabId || tabId === WHITEBOARD_BOARD_TAB_ID) {
+      return;
+    }
+
+    this.ensureWhiteboardState(room);
+    const nextTabs = room.whiteboard.tabs.filter((tab) => tab.id !== tabId);
+    if (nextTabs.length === room.whiteboard.tabs.length) {
+      return;
+    }
+
+    room.whiteboard.tabs = nextTabs;
+    room.whiteboard.activeTabId =
+      room.whiteboard.activeTabId === tabId
+        ? WHITEBOARD_BOARD_TAB_ID
+        : room.whiteboard.activeTabId;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-pdf-viewport')
+  handleWhiteboardPdfViewport(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      scrollRatio?: number;
+      zoom?: number;
+      viewportPageNumber?: number;
+      viewportPageOffsetRatio?: number;
+      viewportLeftRatio?: number;
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:pdf-viewport:${client.id}`, 1500, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const tab = this.getWhiteboardPdfTab(room, data?.tabId);
+    if (!tab) {
+      return;
+    }
+
+    if (typeof data?.scrollRatio !== 'undefined') {
+      tab.scrollRatio = this.sanitizeWhiteboardScrollRatio(data?.scrollRatio);
+    }
+    if (typeof data?.zoom !== 'undefined') {
+      tab.zoom = this.sanitizeWhiteboardZoom(data?.zoom);
+    }
+    if (typeof data?.viewportPageNumber !== 'undefined') {
+      tab.viewportPageNumber = this.sanitizeWhiteboardPageNumber(data?.viewportPageNumber);
+    }
+    if (typeof data?.viewportPageOffsetRatio !== 'undefined') {
+      tab.viewportPageOffsetRatio = this.sanitizeWhiteboardScrollRatio(
+        data?.viewportPageOffsetRatio,
+      );
+    }
+    if (typeof data?.viewportLeftRatio !== 'undefined') {
+      tab.viewportLeftRatio = this.sanitizeWhiteboardViewportLeftRatio(
+        data?.viewportLeftRatio,
+      );
+    }
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-undo')
+  handleWhiteboardUndo(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { roomId: string; tabId?: string; pageNumber?: number },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:undo:${client.id}`, 240, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const target = this.getWhiteboardHistoryTarget(
+      room,
+      data?.tabId,
+      data?.pageNumber,
+      false,
+    );
+    if (!target || !this.applyWhiteboardUndo(target)) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-redo')
+  handleWhiteboardRedo(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { roomId: string; tabId?: string; pageNumber?: number },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:redo:${client.id}`, 240, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const target = this.getWhiteboardHistoryTarget(
+      room,
+      data?.tabId,
+      data?.pageNumber,
+      false,
+    );
+    if (!target || !this.applyWhiteboardRedo(target)) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-stroke-start')
+  handleWhiteboardStrokeStart(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      pageNumber?: number;
+      strokeId: string;
+      tool?: WhiteboardTool;
+      color?: string;
+      size?: number;
+      point?: WhiteboardPoint;
+      text?: string;
+    },
+  ) {
+    this.rateLimiter.take(
+      `video:whiteboard:stroke-start:${client.id}`,
+      1200,
+      60_000,
+    );
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    const strokeId = this.sanitizeWhiteboardStrokeId(data?.strokeId);
+    const point = this.sanitizeWhiteboardPoint(data?.point);
+    if (!strokeId || !point) {
+      return;
+    }
+
+    const stroke: WhiteboardStroke = {
+      id: strokeId,
+      tool: this.sanitizeWhiteboardTool(data?.tool),
+      color: this.sanitizeWhiteboardColor(data?.color),
+      size: this.sanitizeWhiteboardSize(data?.size),
+      points: [point],
+      text: this.sanitizeWhiteboardText(data?.text),
+      createdAt: Date.now(),
+    };
+
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.updatedAt = Date.now();
+
+    if (tab.type === 'board') {
+      this.pushWhiteboardHistory(
+        tab,
+        this.trimWhiteboardStrokes(
+          tab.strokes
+            .filter((existingStroke) => existingStroke.id !== strokeId)
+            .concat(stroke),
+        ),
+      );
+    } else {
+      const pageState = this.getWhiteboardPdfPage(tab, data?.pageNumber, true);
+      if (!pageState) {
+        return;
+      }
+      this.pushWhiteboardHistory(
+        pageState,
+        this.trimWhiteboardStrokes(
+          pageState.strokes
+            .filter((existingStroke) => existingStroke.id !== strokeId)
+            .concat(stroke),
+        ),
+      );
+    }
+
+    client.to(roomId).emit('whiteboard-stroke-started', {
+      tabId: tab.id,
+      pageNumber:
+        tab.type === 'pdf'
+          ? this.sanitizeWhiteboardPageNumber(data?.pageNumber)
+          : undefined,
+      stroke,
+    });
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-stroke-append')
+  handleWhiteboardStrokeAppend(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      pageNumber?: number;
+      strokeId: string;
+      points?: WhiteboardPoint[];
+    },
+  ) {
+    this.rateLimiter.take(
+      `video:whiteboard:stroke-append:${client.id}`,
+      6000,
+      60_000,
+    );
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    const strokeId = this.sanitizeWhiteboardStrokeId(data?.strokeId);
+    const points = this.sanitizeWhiteboardPoints(data?.points);
+    if (!strokeId || points.length === 0) {
+      return;
+    }
+
+    const pageNumber = this.sanitizeWhiteboardPageNumber(data?.pageNumber);
+    const strokeSource =
+      tab.type === 'board'
+        ? tab.strokes
+        : (this.getWhiteboardPdfPage(tab, pageNumber, false)?.strokes ?? []);
+    const stroke = strokeSource.find((existingStroke) => existingStroke.id === strokeId);
+    if (!stroke) {
+      return;
+    }
+
+    const remainingPoints =
+      WHITEBOARD_MAX_POINTS_PER_STROKE - stroke.points.length;
+    if (remainingPoints <= 0) {
+      return;
+    }
+
+    const acceptedPoints = points.slice(0, remainingPoints);
+    if (acceptedPoints.length === 0) {
+      return;
+    }
+
+    stroke.points.push(...acceptedPoints);
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.updatedAt = Date.now();
+
+    client.to(roomId).emit('whiteboard-stroke-appended', {
+      tabId: tab.id,
+      pageNumber: tab.type === 'pdf' ? pageNumber : undefined,
+      strokeId,
+      points: acceptedPoints,
+    });
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-stroke-remove')
+  handleWhiteboardStrokeRemove(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      pageNumber?: number;
+      strokeId: string;
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:stroke-remove:${client.id}`, 3000, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    const strokeId = this.sanitizeWhiteboardStrokeId(data?.strokeId);
+    if (!strokeId) {
+      return;
+    }
+
+    let nextStrokes: WhiteboardStroke[] = [];
+    let previousLength = 0;
+
+    if (tab.type === 'board') {
+      previousLength = tab.strokes.length;
+      nextStrokes = tab.strokes.filter(
+        (existingStroke) => existingStroke.id !== strokeId,
+      );
+      if (nextStrokes.length === previousLength) {
+        return;
+      }
+      this.pushWhiteboardHistory(tab, nextStrokes);
+    } else {
+      const pageState = this.getWhiteboardPdfPage(tab, data?.pageNumber, false);
+      if (!pageState) {
+        return;
+      }
+      previousLength = pageState.strokes.length;
+      nextStrokes = pageState.strokes.filter(
+        (existingStroke) => existingStroke.id !== strokeId,
+      );
+      if (nextStrokes.length === previousLength) {
+        return;
+      }
+      this.pushWhiteboardHistory(pageState, nextStrokes);
+    }
+
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.updatedAt = Date.now();
+
+    client.to(roomId).emit('whiteboard-stroke-removed', {
+      tabId: tab.id,
+      pageNumber:
+        tab.type === 'pdf'
+          ? this.sanitizeWhiteboardPageNumber(data?.pageNumber)
+          : undefined,
+      strokeId,
+    });
+    this.emitWhiteboardState(roomId, room);
   }
 
   // ─── WebRTC Signaling ────────────────────────────────────────────────────────
