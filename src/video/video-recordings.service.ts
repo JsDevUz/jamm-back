@@ -308,7 +308,7 @@ export class VideoRecordingsService {
       .findOne({
         publicId,
         accessToken: token,
-        status: 'ready',
+        status: { $ne: 'expired' },
       })
       .exec();
 
@@ -397,6 +397,40 @@ export class VideoRecordingsService {
 
   private buildFinalKey(session: VideoRecordingDocument) {
     return `recordings/final/${session.ownerUserId.toString()}/${session._id.toString()}/${session.filename}`;
+  }
+
+  private async convertLocalRecordingToMp4(
+    inputPath: string,
+    outputPath: string,
+  ) {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-fflags',
+      '+genpts',
+      '-avoid_negative_ts',
+      'make_zero',
+      '-i',
+      inputPath,
+      '-map',
+      '0:v:0?',
+      '-map',
+      '0:a:0?',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'veryfast',
+      '-vf',
+      'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      '-movflags',
+      '+faststart',
+      outputPath,
+    ]);
   }
 
   private async downloadObjectToLocalFile(key: string, outputPath: string) {
@@ -534,6 +568,7 @@ export class VideoRecordingsService {
         await mkdir(tempDir, { recursive: true });
         const rawExtension = workingSession.fileExtension || 'webm';
         const assembledInputPath = join(tempDir, `assembled.${rawExtension}`);
+        const convertedOutputPath = join(tempDir, 'final.mp4');
 
         try {
           const sortedSegments = [...(workingSession.segments || [])].sort(
@@ -544,43 +579,43 @@ export class VideoRecordingsService {
             assembledInputPath,
           );
 
-          session.fileExtension = rawExtension;
-          session.mimeType =
-            rawExtension === 'webm' ? 'video/webm' : workingSession.mimeType || 'video/webm';
-          session.filename = replaceFileExtension(session.filename, rawExtension);
+          if (rawExtension === 'mp4') {
+            session.fileExtension = 'mp4';
+            session.mimeType = 'video/mp4';
+            session.filename = replaceFileExtension(session.filename, 'mp4');
 
-          const finalFileKey = this.buildFinalKey(session);
-          const finalFileUrl = await this.r2Service.uploadLocalFile(
-            assembledInputPath,
-            finalFileKey,
-            session.mimeType || 'video/webm',
-          );
+            const finalFileKey = this.buildFinalKey(session);
+            const finalFileUrl = await this.r2Service.uploadLocalFile(
+              assembledInputPath,
+              finalFileKey,
+              'video/mp4',
+            );
 
-          session.finalFileKey = finalFileKey;
-          session.finalFileUrl = finalFileUrl;
+            session.finalFileKey = finalFileKey;
+            session.finalFileUrl = finalFileUrl;
+          } else {
+            await this.convertLocalRecordingToMp4(
+              assembledInputPath,
+              convertedOutputPath,
+            );
+
+            session.fileExtension = 'mp4';
+            session.mimeType = 'video/mp4';
+            session.filename = replaceFileExtension(session.filename, 'mp4');
+
+            const finalFileKey = this.buildFinalKey(session);
+            const finalFileUrl = await this.r2Service.uploadLocalFile(
+              convertedOutputPath,
+              finalFileKey,
+              'video/mp4',
+            );
+
+            session.finalFileKey = finalFileKey;
+            session.finalFileUrl = finalFileUrl;
+          }
         } finally {
           await rm(tempDir, { recursive: true, force: true }).catch(() => {});
         }
-      }
-
-      const downloadUrl = this.buildDownloadUrl(session);
-      if (!downloadUrl) {
-        throw new BadRequestException('Recording yuklab olish manzili topilmadi');
-      }
-
-      if (!session.savedMessageId) {
-        const ownerUserId = session.ownerUserId.toString();
-        const savedChat = await this.chatsService.ensureSavedMessagesChat(
-          ownerUserId,
-        );
-        const message = await this.chatsService.sendMessage(
-          savedChat._id.toString(),
-          ownerUserId,
-          this.buildSavedMessageText(session, downloadUrl),
-        );
-
-        session.savedMessagesChatId = savedChat._id as any;
-        session.savedMessageId = message._id as any;
       }
 
       await Promise.all(
@@ -595,6 +630,34 @@ export class VideoRecordingsService {
       session.lastError = '';
       session.segments = [];
       await session.save();
+
+      const downloadUrl = this.buildDownloadUrl(session);
+      if (!downloadUrl) {
+        throw new BadRequestException('Recording yuklab olish manzili topilmadi');
+      }
+
+      if (!session.savedMessageId) {
+        try {
+          const ownerUserId = session.ownerUserId.toString();
+          const savedChat = await this.chatsService.ensureSavedMessagesChat(
+            ownerUserId,
+          );
+          const message = await this.chatsService.sendMessage(
+            savedChat._id.toString(),
+            ownerUserId,
+            this.buildSavedMessageText(session, downloadUrl),
+          );
+
+          session.savedMessagesChatId = savedChat._id as any;
+          session.savedMessageId = message._id as any;
+          await session.save();
+        } catch (messageError) {
+          this.logger.error(
+            `Failed to send saved-messages recording link for ${session._id}`,
+            messageError as any,
+          );
+        }
+      }
 
       return session;
     } catch (error) {
@@ -710,17 +773,16 @@ export class VideoRecordingsService {
         'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-pix_fmt',
         'yuv420p',
+        '-movflags',
+        '+faststart',
         '-c:a',
         'aac',
         '-b:a',
         '128k',
-        '-movflags',
-        '+faststart',
         outputPath,
       ]);
 
       const previousFinalKey = latestSession.finalFileKey;
-      const previousFinalUrl = latestSession.finalFileUrl;
       const nextFilename = replaceFileExtension(latestSession.filename, 'mp4');
       latestSession.filename = nextFilename;
       latestSession.fileExtension = 'mp4';
@@ -735,10 +797,6 @@ export class VideoRecordingsService {
 
       if (previousFinalKey && previousFinalKey !== latestSession.finalFileKey) {
         await this.r2Service.deleteFile(previousFinalKey).catch(() => false);
-      }
-
-      if (previousFinalUrl && previousFinalUrl !== latestSession.finalFileUrl) {
-        void previousFinalUrl;
       }
 
       return latestSession;
