@@ -8,9 +8,11 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { createWriteStream } from 'fs';
 import { mkdir, rm } from 'fs/promises';
+import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { promisify } from 'util';
 import { Readable } from 'stream';
 import { Model, Types } from 'mongoose';
 import { R2Service } from '../common/services/r2.service';
@@ -26,6 +28,7 @@ const RECORDING_SEGMENT_WAIT_MS = 5_000;
 const RECORDING_DOWNLOAD_WARNING_UZ =
   "24 soat ichida o'chirib tashlanadi.";
 const RECORDING_MAX_CHUNK_BYTES = 64 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 const normalizeBaseUrl = (value?: string | null) =>
   String(value || '').trim().replace(/\/+$/, '');
@@ -70,6 +73,10 @@ export class VideoRecordingsService {
   private readonly finalizationTasks = new Map<
     string,
     Promise<VideoRecordingDocument | null>
+  >();
+  private readonly mp4ConversionTasks = new Map<
+    string,
+    Promise<VideoRecordingDocument>
   >();
 
   constructor(
@@ -316,6 +323,35 @@ export class VideoRecordingsService {
     return session;
   }
 
+  async ensureMp4DownloadableRecording(session: VideoRecordingDocument) {
+    const normalizedExtension = String(session.fileExtension || '')
+      .trim()
+      .toLowerCase();
+    const normalizedMimeType = String(session.mimeType || '')
+      .trim()
+      .toLowerCase();
+
+    if (
+      normalizedExtension === 'mp4' ||
+      normalizedMimeType.includes('mp4') ||
+      String(session.finalFileKey || '').toLowerCase().endsWith('.mp4')
+    ) {
+      return session;
+    }
+
+    const taskKey = session._id.toString();
+    const existingTask = this.mp4ConversionTasks.get(taskKey);
+    if (existingTask) {
+      return existingTask;
+    }
+
+    const task = this.convertRecordingToMp4(session).finally(() => {
+      this.mp4ConversionTasks.delete(taskKey);
+    });
+    this.mp4ConversionTasks.set(taskKey, task);
+    return task;
+  }
+
   async getRecordingFileStream(session: VideoRecordingDocument) {
     return this.r2Service.getFileStream(session.finalFileKey);
   }
@@ -361,6 +397,28 @@ export class VideoRecordingsService {
 
   private buildFinalKey(session: VideoRecordingDocument) {
     return `recordings/final/${session.ownerUserId.toString()}/${session._id.toString()}/${session.filename}`;
+  }
+
+  private async downloadObjectToLocalFile(key: string, outputPath: string) {
+    const output = createWriteStream(outputPath, { flags: 'w' });
+
+    try {
+      const file = await this.r2Service.getFileStream(key);
+      await this.appendStreamToFile(file.stream, output);
+
+      await new Promise<void>((resolve, reject) => {
+        output.end((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    } finally {
+      output.destroy();
+    }
   }
 
   private async assembleRecordingChunksToFile(
@@ -600,5 +658,98 @@ export class VideoRecordingsService {
     ].filter(Boolean);
 
     await Promise.all(keys.map((key) => this.r2Service.deleteFile(key)));
+  }
+
+  private async convertRecordingToMp4(session: VideoRecordingDocument) {
+    if (!session.finalFileKey) {
+      throw new BadRequestException('Recording fayli topilmadi');
+    }
+
+    const latestSession =
+      (await this.recordingModel.findById(session._id).exec()) || session;
+    if (
+      String(latestSession.fileExtension || '').toLowerCase() === 'mp4' ||
+      String(latestSession.mimeType || '').toLowerCase().includes('mp4') ||
+      String(latestSession.finalFileKey || '').toLowerCase().endsWith('.mp4')
+    ) {
+      return latestSession;
+    }
+
+    const tempDir = join(
+      tmpdir(),
+      'jamm-recording-download-convert',
+      latestSession._id.toString(),
+      randomUUID(),
+    );
+    await mkdir(tempDir, { recursive: true });
+
+    const inputExtension = latestSession.fileExtension || 'webm';
+    const inputPath = join(tempDir, `source.${inputExtension}`);
+    const outputPath = join(tempDir, 'download.mp4');
+
+    try {
+      await this.downloadObjectToLocalFile(latestSession.finalFileKey, inputPath);
+
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-fflags',
+        '+genpts',
+        '-avoid_negative_ts',
+        'make_zero',
+        '-i',
+        inputPath,
+        '-map',
+        '0:v:0?',
+        '-map',
+        '0:a:0?',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-vf',
+        'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        '-movflags',
+        '+faststart',
+        outputPath,
+      ]);
+
+      const previousFinalKey = latestSession.finalFileKey;
+      const previousFinalUrl = latestSession.finalFileUrl;
+      const nextFilename = replaceFileExtension(latestSession.filename, 'mp4');
+      latestSession.filename = nextFilename;
+      latestSession.fileExtension = 'mp4';
+      latestSession.mimeType = 'video/mp4';
+      latestSession.finalFileKey = this.buildFinalKey(latestSession);
+      latestSession.finalFileUrl = await this.r2Service.uploadLocalFile(
+        outputPath,
+        latestSession.finalFileKey,
+        'video/mp4',
+      );
+      await latestSession.save();
+
+      if (previousFinalKey && previousFinalKey !== latestSession.finalFileKey) {
+        await this.r2Service.deleteFile(previousFinalKey).catch(() => false);
+      }
+
+      if (previousFinalUrl && previousFinalUrl !== latestSession.finalFileUrl) {
+        void previousFinalUrl;
+      }
+
+      return latestSession;
+    } catch (error) {
+      this.logger.error(
+        `Failed to convert downloadable recording ${latestSession._id} to mp4`,
+        error as any,
+      );
+      throw error;
+    } finally {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }

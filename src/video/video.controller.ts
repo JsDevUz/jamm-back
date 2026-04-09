@@ -164,15 +164,17 @@ export class VideoController {
       publicId,
       token,
     );
+    const downloadableSession =
+      await this.videoRecordingsService.ensureMp4DownloadableRecording(session);
     const file = await this.videoRecordingsService.getRecordingFileStream(
-      session,
+      downloadableSession,
     );
 
-    res.setHeader('Content-Type', file.contentType || 'video/webm');
+    res.setHeader('Content-Type', file.contentType || 'video/mp4');
     res.setHeader('Content-Length', String(file.contentLength || 0));
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${encodeURIComponent(session.filename)}"`,
+      `attachment; filename="${encodeURIComponent(downloadableSession.filename)}"`,
     );
     res.setHeader('Cache-Control', 'private, max-age=60');
 
