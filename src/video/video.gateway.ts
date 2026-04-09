@@ -34,8 +34,20 @@ interface WhiteboardPoint {
   y: number;
 }
 
-type WhiteboardTool = 'pen' | 'eraser' | 'text';
+type WhiteboardTool =
+  | 'pen'
+  | 'eraser'
+  | 'text'
+  | 'arrow'
+  | 'rectangle'
+  | 'diamond'
+  | 'triangle'
+  | 'circle';
 type WhiteboardTabType = 'board' | 'pdf';
+type WhiteboardTextFontFamily = 'sans' | 'serif' | 'mono' | 'hand';
+type WhiteboardTextSize = 's' | 'm' | 'l' | 'xl';
+type WhiteboardTextAlign = 'left' | 'center' | 'right';
+type WhiteboardShapeEdge = 'sharp' | 'rounded';
 
 interface WhiteboardStroke {
   id: string;
@@ -44,6 +56,13 @@ interface WhiteboardStroke {
   size: number;
   points: WhiteboardPoint[];
   text?: string;
+  fillColor?: string;
+  fontFamily?: WhiteboardTextFontFamily;
+  textSize?: WhiteboardTextSize;
+  textAlign?: WhiteboardTextAlign;
+  fontPixelSize?: number;
+  edgeStyle?: WhiteboardShapeEdge;
+  rotation?: number;
   createdAt: number;
 }
 
@@ -58,6 +77,9 @@ interface WhiteboardBoardTab {
   id: string;
   type: 'board';
   title: string;
+  zoom: number;
+  viewportBaseWidth: number;
+  viewportBaseHeight: number;
   strokes: WhiteboardStroke[];
   undoStack: WhiteboardStroke[][];
   redoStack: WhiteboardStroke[][];
@@ -75,6 +97,8 @@ interface WhiteboardPdfTab {
   viewportPageNumber: number;
   viewportPageOffsetRatio: number;
   viewportLeftRatio: number;
+  viewportVisibleHeightRatio: number;
+  viewportBaseWidth: number;
   selectedPagesMode: 'all' | 'custom';
   selectedPages: number[];
   pages: WhiteboardPdfPageState[];
@@ -133,14 +157,39 @@ const WHITEBOARD_MAX_FILE_URL_CHARS = 2048;
 const WHITEBOARD_MAX_LIBRARY_ITEMS = 24;
 const WHITEBOARD_MIN_ZOOM = 0.5;
 const WHITEBOARD_MAX_ZOOM = 3;
+const WHITEBOARD_BOARD_POINT_MIN = -0.5;
+const WHITEBOARD_BOARD_POINT_MAX = 1.5;
+const WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH = 120;
+const WHITEBOARD_MAX_VIEWPORT_BASE_WIDTH = 4096;
+const WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT = 120;
+const WHITEBOARD_MAX_VIEWPORT_BASE_HEIGHT = 4096;
 const WHITEBOARD_MAX_HISTORY_ENTRIES = 48;
 const WHITEBOARD_MAX_SELECTED_PAGES = 240;
 const WHITEBOARD_MAX_TEXT_CHARS = 240;
+const WHITEBOARD_TEXT_FONT_FAMILY_OPTIONS: WhiteboardTextFontFamily[] = [
+  'sans',
+  'serif',
+  'mono',
+  'hand',
+];
+const WHITEBOARD_TEXT_SIZE_OPTIONS: WhiteboardTextSize[] = ['s', 'm', 'l', 'xl'];
+const WHITEBOARD_TEXT_ALIGN_OPTIONS: WhiteboardTextAlign[] = [
+  'left',
+  'center',
+  'right',
+];
+const WHITEBOARD_SHAPE_EDGE_OPTIONS: WhiteboardShapeEdge[] = [
+  'sharp',
+  'rounded',
+];
 
 const createWhiteboardBoardTab = (): WhiteboardBoardTab => ({
   id: WHITEBOARD_BOARD_TAB_ID,
   type: 'board',
   title: 'board',
+  zoom: 1,
+  viewportBaseWidth: WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH,
+  viewportBaseHeight: WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT,
   strokes: [],
   undoStack: [],
   redoStack: [],
@@ -155,6 +204,14 @@ const createDefaultWhiteboardState = (): WhiteboardState => ({
   pdfLibrary: [],
   updatedAt: Date.now(),
 });
+
+const getWhiteboardPdfLibraryBytes = (
+  items: WhiteboardPdfLibraryItem[] | undefined,
+): number =>
+  (Array.isArray(items) ? items : []).reduce(
+    (sum, item) => sum + Math.max(0, Number(item?.fileSize || 0)),
+    0,
+  );
 
 @WebSocketGateway({
   cors: {
@@ -215,8 +272,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     return {
-      x: Math.min(1, Math.max(0, x)),
-      y: Math.min(1, Math.max(0, y)),
+      x: Math.min(WHITEBOARD_BOARD_POINT_MAX, Math.max(WHITEBOARD_BOARD_POINT_MIN, x)),
+      y: Math.min(WHITEBOARD_BOARD_POINT_MAX, Math.max(WHITEBOARD_BOARD_POINT_MIN, y)),
     };
   }
 
@@ -243,6 +300,16 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return 'text';
     }
 
+    if (
+      rawValue === 'arrow' ||
+      rawValue === 'rectangle' ||
+      rawValue === 'diamond' ||
+      rawValue === 'triangle' ||
+      rawValue === 'circle'
+    ) {
+      return rawValue;
+    }
+
     return 'pen';
   }
 
@@ -250,6 +317,60 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return typeof rawValue === 'string'
       ? rawValue.replace(/\s+$/g, '').slice(0, WHITEBOARD_MAX_TEXT_CHARS)
       : '';
+  }
+
+  private sanitizeWhiteboardTextFontFamily(
+    rawValue: unknown,
+  ): WhiteboardTextFontFamily {
+    return WHITEBOARD_TEXT_FONT_FAMILY_OPTIONS.includes(
+      rawValue as WhiteboardTextFontFamily,
+    )
+      ? (rawValue as WhiteboardTextFontFamily)
+      : 'sans';
+  }
+
+  private sanitizeWhiteboardTextSize(rawValue: unknown): WhiteboardTextSize {
+    return WHITEBOARD_TEXT_SIZE_OPTIONS.includes(rawValue as WhiteboardTextSize)
+      ? (rawValue as WhiteboardTextSize)
+      : 'm';
+  }
+
+  private sanitizeWhiteboardTextAlign(rawValue: unknown): WhiteboardTextAlign {
+    return WHITEBOARD_TEXT_ALIGN_OPTIONS.includes(rawValue as WhiteboardTextAlign)
+      ? (rawValue as WhiteboardTextAlign)
+      : 'left';
+  }
+
+  private sanitizeWhiteboardFontPixelSize(rawValue: unknown): number {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    return Math.min(240, Math.max(8, Math.round(value)));
+  }
+
+  private sanitizeWhiteboardShapeEdge(rawValue: unknown): WhiteboardShapeEdge {
+    return WHITEBOARD_SHAPE_EDGE_OPTIONS.includes(rawValue as WhiteboardShapeEdge)
+      ? (rawValue as WhiteboardShapeEdge)
+      : 'sharp';
+  }
+
+  private sanitizeWhiteboardRotation(rawValue: unknown): number {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    const turn = Math.PI * 2;
+    let normalized = value % turn;
+    if (normalized > Math.PI) {
+      normalized -= turn;
+    } else if (normalized < -Math.PI) {
+      normalized += turn;
+    }
+
+    return normalized;
   }
 
   private sanitizeWhiteboardTabId(rawValue: unknown): string {
@@ -270,6 +391,17 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return WHITEBOARD_COLOR_PATTERN.test(nextColor)
       ? nextColor.toLowerCase()
       : '#0f172a';
+  }
+
+  private sanitizeWhiteboardFillColor(rawValue: unknown): string {
+    if (typeof rawValue !== 'string') {
+      return '';
+    }
+
+    const nextColor = rawValue.trim();
+    return WHITEBOARD_COLOR_PATTERN.test(nextColor)
+      ? nextColor.toLowerCase()
+      : '';
   }
 
   private sanitizeWhiteboardSize(rawValue: unknown): number {
@@ -372,6 +504,30 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     return Math.min(WHITEBOARD_MAX_ZOOM, Math.max(WHITEBOARD_MIN_ZOOM, zoom));
+  }
+
+  private sanitizeWhiteboardViewportBaseWidth(rawValue: unknown): number {
+    const viewportBaseWidth = Number(rawValue);
+    if (!Number.isFinite(viewportBaseWidth)) {
+      return WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH;
+    }
+
+    return Math.min(
+      WHITEBOARD_MAX_VIEWPORT_BASE_WIDTH,
+      Math.max(WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH, Math.round(viewportBaseWidth)),
+    );
+  }
+
+  private sanitizeWhiteboardViewportBaseHeight(rawValue: unknown): number {
+    const viewportBaseHeight = Number(rawValue);
+    if (!Number.isFinite(viewportBaseHeight)) {
+      return WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT;
+    }
+
+    return Math.min(
+      WHITEBOARD_MAX_VIEWPORT_BASE_HEIGHT,
+      Math.max(WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT, Math.round(viewportBaseHeight)),
+    );
   }
 
   private sanitizeWhiteboardPageNumber(rawValue: unknown): number {
@@ -513,9 +669,33 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       room.whiteboard.tabs.unshift(createWhiteboardBoardTab());
     } else if (boardTab.id !== WHITEBOARD_BOARD_TAB_ID) {
       boardTab.id = WHITEBOARD_BOARD_TAB_ID;
+      boardTab.zoom =
+        typeof boardTab.zoom === 'number'
+          ? this.sanitizeWhiteboardZoom(boardTab.zoom)
+          : 1;
+      boardTab.viewportBaseWidth =
+        typeof boardTab.viewportBaseWidth === 'number'
+          ? this.sanitizeWhiteboardViewportBaseWidth(boardTab.viewportBaseWidth)
+          : WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH;
+      boardTab.viewportBaseHeight =
+        typeof boardTab.viewportBaseHeight === 'number'
+          ? this.sanitizeWhiteboardViewportBaseHeight(boardTab.viewportBaseHeight)
+          : WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT;
       boardTab.undoStack = Array.isArray(boardTab.undoStack) ? boardTab.undoStack : [];
       boardTab.redoStack = Array.isArray(boardTab.redoStack) ? boardTab.redoStack : [];
     } else {
+      boardTab.zoom =
+        typeof boardTab.zoom === 'number'
+          ? this.sanitizeWhiteboardZoom(boardTab.zoom)
+          : 1;
+      boardTab.viewportBaseWidth =
+        typeof boardTab.viewportBaseWidth === 'number'
+          ? this.sanitizeWhiteboardViewportBaseWidth(boardTab.viewportBaseWidth)
+          : WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH;
+      boardTab.viewportBaseHeight =
+        typeof boardTab.viewportBaseHeight === 'number'
+          ? this.sanitizeWhiteboardViewportBaseHeight(boardTab.viewportBaseHeight)
+          : WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT;
       boardTab.undoStack = Array.isArray(boardTab.undoStack) ? boardTab.undoStack : [];
       boardTab.redoStack = Array.isArray(boardTab.redoStack) ? boardTab.redoStack : [];
     }
@@ -543,6 +723,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         typeof tab.viewportLeftRatio === 'number'
           ? this.sanitizeWhiteboardViewportLeftRatio(tab.viewportLeftRatio)
           : 0;
+      tab.viewportVisibleHeightRatio =
+        typeof tab.viewportVisibleHeightRatio === 'number'
+          ? this.sanitizeWhiteboardScrollRatio(tab.viewportVisibleHeightRatio)
+          : 0;
+      tab.viewportBaseWidth =
+        typeof tab.viewportBaseWidth === 'number'
+          ? this.sanitizeWhiteboardViewportBaseWidth(tab.viewportBaseWidth)
+          : WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH;
       tab.selectedPages = this.sanitizeWhiteboardSelectedPages(tab.selectedPages);
       tab.selectedPagesMode =
         this.sanitizeWhiteboardSelectedPagesMode(
@@ -655,6 +843,19 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return String(client.data?.user?._id || '');
   }
 
+  private async getSocketPremiumStatus(client: Socket): Promise<string> {
+    const userId = this.getSocketUserId(client);
+    if (!userId) {
+      return 'none';
+    }
+
+    try {
+      return await this.premiumService.getPremiumStatus(userId);
+    } catch {
+      return 'none';
+    }
+  }
+
   private clearDisconnectTimer(room: RoomInfo, socketId: string) {
     const timer = room.disconnectTimers.get(socketId);
     if (timer) {
@@ -687,6 +888,9 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         id: tab.id,
         type: tab.type,
         title: tab.title,
+        zoom: tab.zoom,
+        viewportBaseWidth: tab.viewportBaseWidth,
+        viewportBaseHeight: tab.viewportBaseHeight,
         strokes: tab.strokes,
       };
     }
@@ -703,6 +907,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         viewportPageNumber: tab.viewportPageNumber,
         viewportPageOffsetRatio: tab.viewportPageOffsetRatio,
         viewportLeftRatio: tab.viewportLeftRatio,
+        viewportVisibleHeightRatio: tab.viewportVisibleHeightRatio,
+        viewportBaseWidth: tab.viewportBaseWidth,
         selectedPagesMode: tab.selectedPagesMode,
         selectedPages: tab.selectedPages,
         pages: tab.pages.map((page) => ({
@@ -1415,7 +1621,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('whiteboard-pdf-add')
-  handleWhiteboardPdfAdd(
+  async handleWhiteboardPdfAdd(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
@@ -1450,9 +1656,39 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     this.ensureWhiteboardState(room);
+    const premiumStatus = await this.getSocketPremiumStatus(client);
+    const pdfTabLimit = getTierLimit(APP_LIMITS.whiteboardPdfTabs, premiumStatus);
     const nextTabs = room.whiteboard.tabs.filter((tab) => tab.id !== tabId);
     const pdfTabsCount = nextTabs.filter((tab) => tab.type === 'pdf').length;
-    if (pdfTabsCount >= WHITEBOARD_MAX_TABS - 1) {
+    if (pdfTabsCount >= pdfTabLimit || pdfTabsCount >= WHITEBOARD_MAX_TABS - 1) {
+      client.emit('error', {
+        message: `Bu tarifda ${pdfTabLimit} ta PDF tab ochish mumkin`,
+      });
+      return;
+    }
+
+    const nextFileSize = this.sanitizeWhiteboardFileSize(data?.fileSize);
+    const pdfLibraryBytesLimit = getTierLimit(
+      APP_LIMITS.whiteboardPdfLibraryBytes,
+      premiumStatus,
+    );
+    const nextLibraryItem: WhiteboardPdfLibraryItem = {
+      id: libraryItemId || tabId,
+      title,
+      fileUrl,
+      fileName,
+      fileSize: nextFileSize,
+      createdAt: this.sanitizeWhiteboardTimestamp(data?.createdAt),
+    };
+    const nextLibrary = room.whiteboard.pdfLibrary.filter(
+      (entry) =>
+        entry.id !== nextLibraryItem.id && entry.fileUrl !== nextLibraryItem.fileUrl,
+    );
+    nextLibrary.push(nextLibraryItem);
+    if (getWhiteboardPdfLibraryBytes(nextLibrary) > pdfLibraryBytesLimit) {
+      client.emit('error', {
+        message: `PDF kutubxona limiti ${(pdfLibraryBytesLimit / (1024 * 1024)).toFixed(0)} MB`,
+      });
       return;
     }
 
@@ -1462,12 +1698,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       title,
       fileUrl,
       fileName,
-      fileSize: this.sanitizeWhiteboardFileSize(data?.fileSize),
+      fileSize: nextFileSize,
       scrollRatio: 0,
       zoom: 1,
       viewportPageNumber: 1,
       viewportPageOffsetRatio: 0,
       viewportLeftRatio: 0,
+      viewportVisibleHeightRatio: 0,
+      viewportBaseWidth: WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH,
       selectedPages: this.sanitizeWhiteboardSelectedPages(data?.selectedPages),
       selectedPagesMode:
         this.sanitizeWhiteboardSelectedPagesMode(data?.selectedPagesMode) === 'custom' ||
@@ -1477,14 +1715,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       pages: [],
     };
 
-    this.upsertWhiteboardPdfLibraryItem(room, {
-      id: libraryItemId || tabId,
-      title,
-      fileUrl,
-      fileName,
-      fileSize: this.sanitizeWhiteboardFileSize(data?.fileSize),
-      createdAt: this.sanitizeWhiteboardTimestamp(data?.createdAt),
-    });
+    this.upsertWhiteboardPdfLibraryItem(room, nextLibraryItem);
     room.whiteboard.tabs = [...nextTabs, nextTab];
     room.whiteboard.isActive = true;
     room.whiteboard.activeTabId = tabId;
@@ -1495,7 +1726,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('whiteboard-pdf-library-add')
-  handleWhiteboardPdfLibraryAdd(
+  async handleWhiteboardPdfLibraryAdd(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
@@ -1525,14 +1756,31 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    this.upsertWhiteboardPdfLibraryItem(room, {
+    const premiumStatus = await this.getSocketPremiumStatus(client);
+    const pdfLibraryBytesLimit = getTierLimit(
+      APP_LIMITS.whiteboardPdfLibraryBytes,
+      premiumStatus,
+    );
+    const nextItem: WhiteboardPdfLibraryItem = {
       id: itemId,
       title,
       fileUrl,
       fileName,
       fileSize: this.sanitizeWhiteboardFileSize(data?.fileSize),
       createdAt: this.sanitizeWhiteboardTimestamp(data?.createdAt),
-    });
+    };
+    const nextLibrary = room.whiteboard.pdfLibrary.filter(
+      (entry) => entry.id !== nextItem.id && entry.fileUrl !== nextItem.fileUrl,
+    );
+    nextLibrary.push(nextItem);
+    if (getWhiteboardPdfLibraryBytes(nextLibrary) > pdfLibraryBytesLimit) {
+      client.emit('error', {
+        message: `PDF kutubxona limiti ${(pdfLibraryBytesLimit / (1024 * 1024)).toFixed(0)} MB`,
+      });
+      return;
+    }
+
+    this.upsertWhiteboardPdfLibraryItem(room, nextItem);
     room.whiteboard.ownerPeerId = client.id;
     room.whiteboard.ownerUserId = this.getSocketUserId(client);
     room.whiteboard.updatedAt = Date.now();
@@ -1583,6 +1831,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       viewportPageNumber?: number;
       viewportPageOffsetRatio?: number;
       viewportLeftRatio?: number;
+      viewportVisibleHeightRatio?: number;
+      viewportBaseWidth?: number;
     },
   ) {
     this.rateLimiter.take(`video:whiteboard:pdf-viewport:${client.id}`, 1500, 60_000);
@@ -1616,6 +1866,62 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         data?.viewportLeftRatio,
       );
     }
+    if (typeof data?.viewportVisibleHeightRatio !== 'undefined') {
+      tab.viewportVisibleHeightRatio = this.sanitizeWhiteboardScrollRatio(
+        data?.viewportVisibleHeightRatio,
+      );
+    }
+    if (typeof data?.viewportBaseWidth !== 'undefined') {
+      tab.viewportBaseWidth = this.sanitizeWhiteboardViewportBaseWidth(
+        data?.viewportBaseWidth,
+      );
+    }
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.updatedAt = Date.now();
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-board-zoom')
+  handleWhiteboardBoardZoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      zoom?: number;
+      viewportBaseWidth?: number;
+      viewportBaseHeight?: number;
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:board-zoom:${client.id}`, 1500, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    if (!tab || tab.type !== 'board') {
+      return;
+    }
+
+    if (typeof data?.zoom !== 'undefined') {
+      tab.zoom = this.sanitizeWhiteboardZoom(data?.zoom);
+    }
+    if (typeof data?.viewportBaseWidth !== 'undefined') {
+      tab.viewportBaseWidth = this.sanitizeWhiteboardViewportBaseWidth(
+        data?.viewportBaseWidth,
+      );
+    }
+    if (typeof data?.viewportBaseHeight !== 'undefined') {
+      tab.viewportBaseHeight = this.sanitizeWhiteboardViewportBaseHeight(
+        data?.viewportBaseHeight,
+      );
+    }
+
     room.whiteboard.activeTabId = tab.id;
     room.whiteboard.ownerPeerId = client.id;
     room.whiteboard.ownerUserId = this.getSocketUserId(client);
@@ -1700,7 +2006,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       color?: string;
       size?: number;
       point?: WhiteboardPoint;
+      points?: WhiteboardPoint[];
       text?: string;
+      fillColor?: string;
+      fontFamily?: WhiteboardTextFontFamily;
+      textSize?: WhiteboardTextSize;
+      textAlign?: WhiteboardTextAlign;
+      fontPixelSize?: number;
+      edgeStyle?: WhiteboardShapeEdge;
+      rotation?: number;
     },
   ) {
     this.rateLimiter.take(
@@ -1717,8 +2031,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const tab =
       this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
     const strokeId = this.sanitizeWhiteboardStrokeId(data?.strokeId);
-    const point = this.sanitizeWhiteboardPoint(data?.point);
-    if (!strokeId || !point) {
+    const points = this.sanitizeWhiteboardPoints(
+      Array.isArray(data?.points) && data.points.length > 0
+        ? data.points
+        : data?.point
+          ? [data.point]
+          : [],
+      WHITEBOARD_MAX_POINTS_PER_STROKE,
+    );
+    if (!strokeId || points.length === 0) {
       return;
     }
 
@@ -1727,8 +2048,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       tool: this.sanitizeWhiteboardTool(data?.tool),
       color: this.sanitizeWhiteboardColor(data?.color),
       size: this.sanitizeWhiteboardSize(data?.size),
-      points: [point],
+      points,
       text: this.sanitizeWhiteboardText(data?.text),
+      fillColor: this.sanitizeWhiteboardFillColor(data?.fillColor),
+      fontFamily: this.sanitizeWhiteboardTextFontFamily(data?.fontFamily),
+      textSize: this.sanitizeWhiteboardTextSize(data?.textSize),
+      textAlign: this.sanitizeWhiteboardTextAlign(data?.textAlign),
+      fontPixelSize: this.sanitizeWhiteboardFontPixelSize(data?.fontPixelSize),
+      edgeStyle: this.sanitizeWhiteboardShapeEdge(data?.edgeStyle),
+      rotation: this.sanitizeWhiteboardRotation(data?.rotation),
       createdAt: Date.now(),
     };
 
@@ -1903,6 +2231,180 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
           ? this.sanitizeWhiteboardPageNumber(data?.pageNumber)
           : undefined,
       strokeId,
+    });
+    this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-stroke-update')
+  handleWhiteboardStrokeUpdate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      tabId?: string;
+      pageNumber?: number;
+      strokeId: string;
+      point?: WhiteboardPoint;
+      points?: WhiteboardPoint[];
+      text?: string;
+      color?: string;
+      size?: number;
+      fillColor?: string;
+      fontFamily?: WhiteboardTextFontFamily;
+      textSize?: WhiteboardTextSize;
+      textAlign?: WhiteboardTextAlign;
+      fontPixelSize?: number;
+      edgeStyle?: WhiteboardShapeEdge;
+      rotation?: number;
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:stroke-update:${client.id}`, 2400, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const tab =
+      this.getWhiteboardTab(room, data?.tabId) || this.getWhiteboardBoardTab(room);
+    const strokeId = this.sanitizeWhiteboardStrokeId(data?.strokeId);
+    if (!strokeId) {
+      return;
+    }
+
+    const point = this.sanitizeWhiteboardPoint(data?.point);
+    const nextPoints =
+      Array.isArray(data?.points) && data.points.length > 0
+        ? this.sanitizeWhiteboardPoints(
+            data.points,
+            WHITEBOARD_MAX_POINTS_PER_STROKE,
+          )
+        : [];
+    const nextText =
+      typeof data?.text === 'string'
+        ? this.sanitizeWhiteboardText(data?.text)
+        : undefined;
+    const nextColor =
+      typeof data?.color === 'string'
+        ? this.sanitizeWhiteboardColor(data?.color)
+        : undefined;
+    const nextSize =
+      typeof data?.size === 'number'
+        ? this.sanitizeWhiteboardSize(data?.size)
+        : undefined;
+    const nextFillColor =
+      typeof data?.fillColor === 'string'
+        ? this.sanitizeWhiteboardFillColor(data?.fillColor)
+        : undefined;
+    const nextFontFamily =
+      typeof data?.fontFamily === 'string'
+        ? this.sanitizeWhiteboardTextFontFamily(data?.fontFamily)
+        : undefined;
+    const nextTextSize =
+      typeof data?.textSize === 'string'
+        ? this.sanitizeWhiteboardTextSize(data?.textSize)
+        : undefined;
+    const nextTextAlign =
+      typeof data?.textAlign === 'string'
+        ? this.sanitizeWhiteboardTextAlign(data?.textAlign)
+        : undefined;
+    const nextFontPixelSize =
+      typeof data?.fontPixelSize === 'number'
+        ? this.sanitizeWhiteboardFontPixelSize(data?.fontPixelSize)
+        : undefined;
+    const nextEdgeStyle =
+      typeof data?.edgeStyle === 'string'
+        ? this.sanitizeWhiteboardShapeEdge(data?.edgeStyle)
+        : undefined;
+    const nextRotation =
+      typeof data?.rotation === 'number'
+        ? this.sanitizeWhiteboardRotation(data?.rotation)
+        : undefined;
+
+    const updateStroke = (stroke: WhiteboardStroke): WhiteboardStroke =>
+      stroke.id !== strokeId
+        ? stroke
+        : {
+            ...stroke,
+            points:
+              nextPoints.length > 0
+                ? nextPoints
+                : point
+                  ? [point]
+                  : stroke.points,
+            text: typeof nextText === 'string' ? nextText : stroke.text,
+            color: nextColor || stroke.color,
+            size: typeof nextSize === 'number' ? nextSize : stroke.size,
+            fillColor:
+              typeof nextFillColor === 'string'
+                ? nextFillColor
+                : stroke.fillColor,
+            fontFamily: nextFontFamily || stroke.fontFamily,
+            textSize: nextTextSize || stroke.textSize,
+            textAlign: nextTextAlign || stroke.textAlign,
+            fontPixelSize:
+              typeof nextFontPixelSize === 'number'
+                ? nextFontPixelSize
+                : stroke.fontPixelSize,
+            edgeStyle: nextEdgeStyle || stroke.edgeStyle,
+            rotation:
+              typeof nextRotation === 'number' ? nextRotation : stroke.rotation,
+          };
+
+    let didUpdate = false;
+    let pageNumber: number | undefined;
+
+    if (tab.type === 'board') {
+      const nextStrokes = tab.strokes.map((stroke) => {
+        if (stroke.id === strokeId) {
+          didUpdate = true;
+        }
+        return updateStroke(stroke);
+      });
+      if (!didUpdate) {
+        return;
+      }
+      this.pushWhiteboardHistory(tab, nextStrokes);
+    } else {
+      pageNumber = this.sanitizeWhiteboardPageNumber(data?.pageNumber);
+      const pageState = this.getWhiteboardPdfPage(tab, pageNumber, false);
+      if (!pageState) {
+        return;
+      }
+
+      const nextStrokes = pageState.strokes.map((stroke) => {
+        if (stroke.id === strokeId) {
+          didUpdate = true;
+        }
+        return updateStroke(stroke);
+      });
+      if (!didUpdate) {
+        return;
+      }
+      this.pushWhiteboardHistory(pageState, nextStrokes);
+    }
+
+    room.whiteboard.ownerPeerId = client.id;
+    room.whiteboard.ownerUserId = this.getSocketUserId(client);
+    room.whiteboard.activeTabId = tab.id;
+    room.whiteboard.updatedAt = Date.now();
+
+    client.to(roomId).emit('whiteboard-stroke-updated', {
+      tabId: tab.id,
+      pageNumber: tab.type === 'pdf' ? pageNumber : undefined,
+      strokeId,
+      point,
+      points: nextPoints.length > 0 ? nextPoints : undefined,
+      text: nextText,
+      color: nextColor,
+      size: nextSize,
+      fillColor: nextFillColor,
+      fontFamily: nextFontFamily,
+      textSize: nextTextSize,
+      textAlign: nextTextAlign,
+      fontPixelSize: nextFontPixelSize,
+      edgeStyle: nextEdgeStyle,
+      rotation: nextRotation,
     });
     this.emitWhiteboardState(roomId, room);
   }

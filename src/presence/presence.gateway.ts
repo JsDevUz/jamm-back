@@ -63,6 +63,34 @@ export class PresenceGateway
     private readonly appSettingsService: AppSettingsService,
   ) {}
 
+  private canViewLastSeen(user?: {
+    premiumStatus?: string | null;
+    premiumExpiresAt?: Date | string | null;
+  } | null) {
+    if (user?.premiumStatus !== 'active' || !user?.premiumExpiresAt) {
+      return false;
+    }
+
+    const expiresAt = new Date(user.premiumExpiresAt);
+    return !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() > Date.now();
+  }
+
+  private emitOfflineEvent(event: PresenceStatusEvent) {
+    const payloadWithLastSeen = {
+      userId: event.userId,
+      lastSeen: new Date(event.timestamp).toISOString(),
+    };
+
+    this.server.sockets.sockets.forEach((socket) => {
+      socket.emit(
+        'user_offline',
+        socket.data?.canViewLastSeen
+          ? payloadWithLastSeen
+          : { userId: event.userId },
+      );
+    });
+  }
+
   /**
    * Called once after the gateway is initialized.
    * Sets up Redis Pub/Sub listener to relay status changes to all connected clients.
@@ -76,10 +104,7 @@ export class PresenceGateway
         if (event.status === 'online') {
           this.server.emit('user_online', { userId: event.userId });
         } else {
-          this.server.emit('user_offline', {
-            userId: event.userId,
-            lastSeen: new Date(event.timestamp).toISOString(),
-          });
+          this.emitOfflineEvent(event);
         }
       },
     );
@@ -106,7 +131,7 @@ export class PresenceGateway
       const userId = payload.sub;
       const user = await this.userModel
         .findById(userId)
-        .select('username')
+        .select('username premiumStatus premiumExpiresAt')
         .lean()
         .exec();
       const officialProfile =
@@ -117,6 +142,7 @@ export class PresenceGateway
       // Attach user data to the socket
       client.data.user = { _id: userId, email: payload.email };
       client.data.isOfficialProfile = Boolean(officialProfile?.hidePresence);
+      client.data.canViewLastSeen = this.canViewLastSeen(user);
 
       // Join a user-specific room (for targeted messaging)
       client.join(`user:${userId}`);

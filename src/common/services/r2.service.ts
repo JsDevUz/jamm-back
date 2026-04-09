@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { createReadStream } from 'fs';
 import { posix } from 'path';
 import { Readable } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
@@ -270,6 +271,31 @@ export class R2Service {
       return this.publicDomain ? this.buildDeliveryUrl(key) : key;
     } catch (error) {
       console.error('Object storage buffer upload error:', error);
+      throw new InternalServerErrorException(
+        'Faylni yuklashda xatolik yuz berdi',
+      );
+    }
+  }
+
+  async uploadLocalFile(
+    filePath: string,
+    key: string,
+    contentType: string = 'application/octet-stream',
+  ): Promise<string> {
+    try {
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: createReadStream(filePath),
+        ContentType: contentType,
+        CacheControl: this.resolveCacheControl(key, contentType),
+      });
+
+      await this.s3Client.send(command);
+
+      return this.publicDomain ? this.buildDeliveryUrl(key) : key;
+    } catch (error) {
+      console.error('Object storage local file upload error:', error);
       throw new InternalServerErrorException(
         'Faylni yuklashda xatolik yuz berdi',
       );

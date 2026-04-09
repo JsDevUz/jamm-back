@@ -40,6 +40,11 @@ export const APP_LIMITS = {
   sentenceBuildersCreated: { ordinary: 30, premium: 100 },
   sentenceBuilderShareLinksPerDeck: { ordinary: 2, premium: 4 },
   sentenceBuilderItemsPerDeck: { ordinary: 30, premium: 50 },
+  whiteboardPdfTabs: { ordinary: 1, premium: 3 },
+  whiteboardPdfLibraryBytes: {
+    ordinary: 50 * 1024 * 1024,
+    premium: 200 * 1024 * 1024,
+  },
   lessonMediaBytes: 200 * 1024 * 1024,
   lessonHomeworkPerLesson: { ordinary: 1, premium: 3 },
   lessonTestsPerLesson: { ordinary: 1, premium: 1 },

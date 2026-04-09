@@ -564,6 +564,37 @@ export class ChatsService implements OnModuleInit {
     });
   }
 
+  async ensureSavedMessagesChat(userId: string): Promise<ChatDocument> {
+    const selfObjectId = new Types.ObjectId(userId);
+
+    const existing = await this.chatModel
+      .findOne({
+        isGroup: false,
+        members: [selfObjectId, selfObjectId],
+      })
+      .exec();
+
+    if (existing) {
+      return existing;
+    }
+
+    const fallback = await this.chatModel
+      .findOne({
+        isGroup: false,
+        members: { $size: 2, $all: [selfObjectId] },
+      })
+      .exec();
+
+    if (fallback) {
+      return fallback;
+    }
+
+    return this.createChat(userId, {
+      isGroup: false,
+      memberIds: [userId],
+    });
+  }
+
   hasPermission(chat: any, userId: string, permission: string): boolean {
     console.log(chat, chat.createdBy?.toString(), userId, permission);
     if (chat.createdBy?.toString() === userId) return true;
