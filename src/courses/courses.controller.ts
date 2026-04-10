@@ -30,6 +30,7 @@ import { basename, extname, join } from 'path';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { Readable } from 'stream';
 import {
   LessonCommentDto,
   MarkAttendanceDto,
@@ -67,6 +68,32 @@ export class CoursesController {
       .update(userAgent || 'unknown-agent')
       .digest('hex')
       .slice(0, 24);
+  }
+
+  private async streamToBuffer(stream: unknown): Promise<Buffer> {
+    if (Buffer.isBuffer(stream)) {
+      return stream;
+    }
+
+    if (stream instanceof Readable) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks);
+    }
+
+    if (stream && typeof (stream as any).transformToByteArray === 'function') {
+      const bytes = await (stream as any).transformToByteArray();
+      return Buffer.from(bytes);
+    }
+
+    if (stream && typeof (stream as any).arrayBuffer === 'function') {
+      const buffer = await (stream as any).arrayBuffer();
+      return Buffer.from(buffer);
+    }
+
+    return Buffer.alloc(0);
   }
 
   private getMimeType(fileName: string) {
@@ -493,6 +520,18 @@ export class CoursesController {
       },
       'static',
     );
+
+    const isPdfFile =
+      objectKey.toLowerCase().endsWith('.pdf') ||
+      String(r2Data.contentType || '').toLowerCase() === 'application/pdf';
+
+    if (!range && isPdfFile) {
+      const pdfBuffer = await this.streamToBuffer(r2Data.stream);
+      headers['Content-Length'] = pdfBuffer.length;
+      res.writeHead(200, headers);
+      res.end(pdfBuffer);
+      return;
+    }
 
     if (r2Data.contentRange) {
       headers['Content-Range'] = r2Data.contentRange;
