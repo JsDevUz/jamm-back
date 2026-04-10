@@ -468,6 +468,42 @@ export class CoursesController {
     return headers;
   }
 
+  @Get('file-proxy')
+  async streamManagedFileProxy(
+    @Query('url') fileUrl: string,
+    @Headers('range') range: string,
+    @Res() res: Response,
+  ) {
+    const normalizedUrl = String(fileUrl || '').trim();
+    if (!normalizedUrl || !this.r2Service.isManagedFile(normalizedUrl)) {
+      throw new NotFoundException('Fayl topilmadi');
+    }
+
+    const objectKey = this.r2Service.getObjectKey(normalizedUrl);
+    if (!objectKey) {
+      throw new NotFoundException('Fayl topilmadi');
+    }
+
+    const r2Data = await this.r2Service.getFileStream(objectKey, range);
+    const headers: Record<string, any> = this.buildPlaybackHeaders(
+      {
+        'Content-Type': r2Data.contentType,
+        'Content-Length': r2Data.contentLength,
+        'Accept-Ranges': r2Data.acceptRanges || 'bytes',
+      },
+      'static',
+    );
+
+    if (r2Data.contentRange) {
+      headers['Content-Range'] = r2Data.contentRange;
+      res.writeHead(206, headers);
+    } else {
+      res.writeHead(200, headers);
+    }
+
+    r2Data.stream.pipe(res);
+  }
+
   private async getAuthorizedLessonForUser(
     courseId: string,
     lessonId: string,

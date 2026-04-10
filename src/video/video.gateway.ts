@@ -98,6 +98,7 @@ interface WhiteboardPdfTab {
   viewportPageOffsetRatio: number;
   viewportLeftRatio: number;
   viewportVisibleHeightRatio: number;
+  viewportVisibleWidthRatio: number;
   viewportBaseWidth: number;
   selectedPagesMode: 'all' | 'custom';
   selectedPages: number[];
@@ -497,6 +498,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return Math.min(1, Math.max(0, leftRatio));
   }
 
+  private sanitizeWhiteboardViewportVisibleWidthRatio(rawValue: unknown): number {
+    const widthRatio = Number(rawValue);
+    if (!Number.isFinite(widthRatio)) {
+      return 0;
+    }
+
+    return Math.min(1, Math.max(0, widthRatio));
+  }
+
   private sanitizeWhiteboardZoom(rawValue: unknown): number {
     const zoom = Number(rawValue);
     if (!Number.isFinite(zoom)) {
@@ -727,6 +737,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         typeof tab.viewportVisibleHeightRatio === 'number'
           ? this.sanitizeWhiteboardScrollRatio(tab.viewportVisibleHeightRatio)
           : 0;
+      tab.viewportVisibleWidthRatio =
+        typeof tab.viewportVisibleWidthRatio === 'number'
+          ? this.sanitizeWhiteboardViewportVisibleWidthRatio(
+              tab.viewportVisibleWidthRatio,
+            )
+          : 0;
       tab.viewportBaseWidth =
         typeof tab.viewportBaseWidth === 'number'
           ? this.sanitizeWhiteboardViewportBaseWidth(tab.viewportBaseWidth)
@@ -908,6 +924,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         viewportPageOffsetRatio: tab.viewportPageOffsetRatio,
         viewportLeftRatio: tab.viewportLeftRatio,
         viewportVisibleHeightRatio: tab.viewportVisibleHeightRatio,
+        viewportVisibleWidthRatio: tab.viewportVisibleWidthRatio,
         viewportBaseWidth: tab.viewportBaseWidth,
         selectedPagesMode: tab.selectedPagesMode,
         selectedPages: tab.selectedPages,
@@ -1705,6 +1722,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       viewportPageOffsetRatio: 0,
       viewportLeftRatio: 0,
       viewportVisibleHeightRatio: 0,
+      viewportVisibleWidthRatio: 0,
       viewportBaseWidth: WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH,
       selectedPages: this.sanitizeWhiteboardSelectedPages(data?.selectedPages),
       selectedPagesMode:
@@ -1832,6 +1850,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       viewportPageOffsetRatio?: number;
       viewportLeftRatio?: number;
       viewportVisibleHeightRatio?: number;
+      viewportVisibleWidthRatio?: number;
       viewportBaseWidth?: number;
     },
   ) {
@@ -1870,6 +1889,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       tab.viewportVisibleHeightRatio = this.sanitizeWhiteboardScrollRatio(
         data?.viewportVisibleHeightRatio,
       );
+    }
+    if (typeof data?.viewportVisibleWidthRatio !== 'undefined') {
+      tab.viewportVisibleWidthRatio =
+        this.sanitizeWhiteboardViewportVisibleWidthRatio(
+          data?.viewportVisibleWidthRatio,
+        );
     }
     if (typeof data?.viewportBaseWidth !== 'undefined') {
       tab.viewportBaseWidth = this.sanitizeWhiteboardViewportBaseWidth(
