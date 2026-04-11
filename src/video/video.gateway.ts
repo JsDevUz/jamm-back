@@ -8,7 +8,7 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { InjectModel } from '@nestjs/mongoose';
-import { Server, Socket } from 'socket.io';
+import { Namespace, Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
@@ -224,7 +224,7 @@ const getWhiteboardPdfLibraryBytes = (
 })
 export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
-  server: Server;
+  server: Server | Namespace;
 
   private rooms = new Map<string, RoomInfo>();
   private readonly rateLimiter = new SocketRateLimiter();
@@ -1005,6 +1005,24 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  private getSocketById(socketId: string): Socket | undefined {
+    if (!socketId) {
+      return undefined;
+    }
+
+    const serverSockets = this.server?.sockets;
+
+    if (serverSockets instanceof Map) {
+      return serverSockets.get(socketId);
+    }
+
+    if ('sockets' in serverSockets && serverSockets.sockets instanceof Map) {
+      return serverSockets.sockets.get(socketId);
+    }
+
+    return undefined;
+  }
+
   private replaceExistingPeerSocket(
     room: RoomInfo,
     roomId: string,
@@ -1036,7 +1054,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       room.whiteboard.updatedAt = Date.now();
     }
 
-    const previousSocket = this.server.sockets.sockets.get(existingSocketId);
+    const previousSocket = this.getSocketById(existingSocketId);
     previousSocket?.leave(roomId);
   }
 
@@ -2744,7 +2762,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Remove from room
     this.removePeerFromRoom(room, data.roomId, data.peerId);
     // Force leave the socket from the room
-    const kickedSocket = this.server.sockets.sockets.get(data.peerId);
+    const kickedSocket = this.getSocketById(data.peerId);
     if (kickedSocket) kickedSocket.leave(data.roomId);
   }
 }

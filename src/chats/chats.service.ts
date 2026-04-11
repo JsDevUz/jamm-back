@@ -40,6 +40,8 @@ import {
 
 @Injectable()
 export class ChatsService implements OnModuleInit {
+  private static readonly INITIAL_MESSAGE_WINDOW_DAYS = 5;
+
   constructor(
     @InjectModel(Chat.name) private chatModel: Model<ChatDocument>,
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
@@ -359,6 +361,18 @@ export class ChatsService implements OnModuleInit {
     return setting?.pushEnabled !== false;
   }
 
+  private getDayStart(value: Date) {
+    const dayStart = new Date(value);
+    dayStart.setHours(0, 0, 0, 0);
+    return dayStart;
+  }
+
+  private addDays(value: Date, days: number) {
+    const nextValue = new Date(value);
+    nextValue.setDate(nextValue.getDate() + days);
+    return nextValue;
+  }
+
   async getUserChats(
     userId: string,
     pagination: { page: number; limit: number } = { page: 1, limit: 15 },
@@ -593,6 +607,22 @@ export class ChatsService implements OnModuleInit {
       isGroup: false,
       memberIds: [userId],
     });
+  }
+
+  async getVideoCallCreatorIdByRoomId(roomId: string): Promise<string | null> {
+    const normalizedRoomId = String(roomId || '').trim();
+    if (!normalizedRoomId) {
+      return null;
+    }
+
+    const chat = await this.chatModel
+      .findOne({ videoCallRoomId: normalizedRoomId })
+      .select('videoCallCreatorId')
+      .lean()
+      .exec();
+
+    const creatorId = chat?.videoCallCreatorId;
+    return creatorId ? String(creatorId) : null;
   }
 
   hasPermission(chat: any, userId: string, permission: string): boolean {
@@ -1051,10 +1081,14 @@ export class ChatsService implements OnModuleInit {
       };
     }
 
-    const dayStart = new Date(latestMessage.createdAt);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setDate(dayEnd.getDate() + 1);
+    const latestMessageDayStart = this.getDayStart(latestMessage.createdAt);
+    const rangeStart = cursorDate
+      ? latestMessageDayStart
+      : this.addDays(
+          latestMessageDayStart,
+          -(ChatsService.INITIAL_MESSAGE_WINDOW_DAYS - 1),
+        );
+    const rangeEnd = this.addDays(latestMessageDayStart, 1);
 
     const [messages, hasOlderMessage] = await Promise.all([
       this.messageModel
@@ -1062,8 +1096,8 @@ export class ChatsService implements OnModuleInit {
           chatId: chatObjectId,
           isDeleted: false,
           createdAt: {
-            $gte: dayStart,
-            $lt: dayEnd,
+            $gte: rangeStart,
+            $lt: rangeEnd,
           },
         })
         .populate(
@@ -1083,7 +1117,7 @@ export class ChatsService implements OnModuleInit {
       this.messageModel.exists({
         chatId: chatObjectId,
         isDeleted: false,
-        createdAt: { $lt: dayStart },
+        createdAt: { $lt: rangeStart },
       }),
     ]);
 
@@ -1113,7 +1147,7 @@ export class ChatsService implements OnModuleInit {
     return {
       data,
       hasMore: Boolean(hasOlderMessage),
-      nextCursor: hasOlderMessage ? dayStart.toISOString() : null,
+      nextCursor: hasOlderMessage ? rangeStart.toISOString() : null,
     };
   }
 

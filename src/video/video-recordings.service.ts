@@ -638,13 +638,15 @@ export class VideoRecordingsService {
 
       if (!session.savedMessageId) {
         try {
-          const ownerUserId = session.ownerUserId.toString();
+          const savedMessagesTargetUserId =
+            (await this.chatsService.getVideoCallCreatorIdByRoomId(session.roomId)) ||
+            session.ownerUserId.toString();
           const savedChat = await this.chatsService.ensureSavedMessagesChat(
-            ownerUserId,
+            savedMessagesTargetUserId,
           );
           const message = await this.chatsService.sendMessage(
             savedChat._id.toString(),
-            ownerUserId,
+            savedMessagesTargetUserId,
             this.buildSavedMessageText(session, downloadUrl),
           );
 
