@@ -2604,6 +2604,33 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.to(data.roomId).emit('screen-share-stopped', { peerId: client.id });
   }
 
+  @SubscribeMessage('media-state-changed')
+  handleMediaStateChanged(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      hasAudio?: boolean;
+      hasVideo?: boolean;
+      audioMuted?: boolean;
+      videoMuted?: boolean;
+    },
+  ) {
+    this.rateLimiter.take(`video:media-state:${client.id}`, 600, 60_000);
+    const room = this.rooms.get(data.roomId);
+    if (!this.isSocketInRoom(room, client.id)) return;
+
+    client.to(data.roomId).emit('media-state-changed', {
+      peerId: client.id,
+      hasAudio: typeof data?.hasAudio === 'boolean' ? data.hasAudio : undefined,
+      hasVideo: typeof data?.hasVideo === 'boolean' ? data.hasVideo : undefined,
+      audioMuted:
+        typeof data?.audioMuted === 'boolean' ? data.audioMuted : undefined,
+      videoMuted:
+        typeof data?.videoMuted === 'boolean' ? data.videoMuted : undefined,
+    });
+  }
+
   // ─── Recording Relay ────────────────────────────────────────────────────────
 
   @SubscribeMessage('recording-started')
