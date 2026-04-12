@@ -20,6 +20,7 @@ import { AppAccessGuard } from './auth/guards/app-access.guard';
 import { CommonModule } from './common/common.module';
 import { AdminModule } from './admin/admin.module';
 import { LinkPreviewModule } from './link-preview/link-preview.module';
+import { LivekitModule } from './livekit/livekit.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { LinkPreviewModule } from './link-preview/link-preview.module';
     AppSettingsModule,
     AdminModule,
     LinkPreviewModule,
+    LivekitModule,
   ],
   providers: [
     {

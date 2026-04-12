@@ -56,6 +56,10 @@ export class MeetsService {
     }));
   }
 
+  async findByRoomId(roomId: string): Promise<Meet | null> {
+    return this.meetModel.findOne({ roomId }).exec();
+  }
+
   async remove(roomId: string, userId: string): Promise<void> {
     const result = await this.meetModel
       .deleteOne({ roomId, creator: userId })
