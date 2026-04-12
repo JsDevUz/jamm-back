@@ -1081,14 +1081,54 @@ export class ChatsService implements OnModuleInit {
       };
     }
 
-    const latestMessageDayStart = this.getDayStart(latestMessage.createdAt);
-    const rangeStart = cursorDate
-      ? latestMessageDayStart
-      : this.addDays(
-          latestMessageDayStart,
-          -(ChatsService.INITIAL_MESSAGE_WINDOW_DAYS - 1),
-        );
-    const rangeEnd = this.addDays(latestMessageDayStart, 1);
+    const dayBuckets = await this.messageModel
+      .aggregate<{
+        _id: string;
+        latestCreatedAt: Date;
+      }>([
+        {
+          $match: {
+            chatId: chatObjectId,
+            isDeleted: false,
+            ...(cursorDate ? { createdAt: { $lt: cursorDate } } : {}),
+          },
+        },
+        {
+          $addFields: {
+            dayKey: {
+              $dateToString: {
+                format: '%Y-%m-%d',
+                date: '$createdAt',
+              },
+            },
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$dayKey',
+            latestCreatedAt: { $first: '$createdAt' },
+          },
+        },
+        { $sort: { latestCreatedAt: -1 } },
+        { $limit: ChatsService.INITIAL_MESSAGE_WINDOW_DAYS },
+      ])
+      .exec();
+
+    if (!dayBuckets.length) {
+      return {
+        data: [],
+        hasMore: false,
+        nextCursor: null,
+      };
+    }
+
+    const latestDayStart = this.getDayStart(dayBuckets[0].latestCreatedAt);
+    const earliestDayStart = this.getDayStart(
+      dayBuckets[dayBuckets.length - 1].latestCreatedAt,
+    );
+    const rangeStart = earliestDayStart;
+    const rangeEnd = this.addDays(latestDayStart, 1);
 
     const [messages, hasOlderMessage] = await Promise.all([
       this.messageModel
