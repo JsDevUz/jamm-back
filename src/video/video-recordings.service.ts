@@ -95,6 +95,7 @@ export class VideoRecordingsService {
       filename?: string;
       apiBaseUrl?: string;
       appBaseUrl?: string;
+      roomCreatorId?: string;
     },
   ) {
     if (!['whiteboard', 'meet'].includes(String(input.kind))) {
@@ -113,8 +114,15 @@ export class VideoRecordingsService {
     );
     const now = new Date();
 
+    // roomCreatorId maydoni - xona yaratuvchisining ID si
+    // Agar ko'rsatilmagan bo'lsa, ownerUserId ni ishlatamiz (fallback)
+    const roomCreatorObjectId = input.roomCreatorId
+      ? new Types.ObjectId(input.roomCreatorId)
+      : new Types.ObjectId(userId);
+
     const session = await this.recordingModel.create({
       ownerUserId: new Types.ObjectId(userId),
+      roomCreatorId: roomCreatorObjectId,
       kind: input.kind,
       roomId,
       publicId: randomUUID(),
@@ -638,9 +646,15 @@ export class VideoRecordingsService {
 
       if (!session.savedMessageId) {
         try {
-          const savedMessagesTargetUserId =
-            (await this.chatsService.getVideoCallCreatorIdByRoomId(session.roomId)) ||
-            session.ownerUserId.toString();
+          // roomCreatorId mavjud bo'lsa uni ishlatamiz, aks holda ownerUserId ga fallback
+          const savedMessagesTargetUserId = session.roomCreatorId
+            ? session.roomCreatorId.toString()
+            : session.ownerUserId.toString();
+
+          this.logger.log(
+            `Sending recording link to saved messages. Session: ${session._id}, TargetUser: ${savedMessagesTargetUserId}, RoomCreatorId: ${session.roomCreatorId?.toString() || 'null'}, OwnerId: ${session.ownerUserId.toString()}`,
+          );
+
           const savedChat = await this.chatsService.ensureSavedMessagesChat(
             savedMessagesTargetUserId,
           );
@@ -653,6 +667,10 @@ export class VideoRecordingsService {
           session.savedMessagesChatId = savedChat._id as any;
           session.savedMessageId = message._id as any;
           await session.save();
+
+          this.logger.log(
+            `Recording link sent successfully. Session: ${session._id}, ChatId: ${savedChat._id.toString()}, MessageId: ${message._id.toString()}`,
+          );
         } catch (messageError) {
           this.logger.error(
             `Failed to send saved-messages recording link for ${session._id}`,

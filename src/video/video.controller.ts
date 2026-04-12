@@ -115,6 +115,7 @@ export class VideoController {
       filename: body?.filename,
       apiBaseUrl: body?.apiBaseUrl || this.resolveRequestBaseUrl(req),
       appBaseUrl: body?.appBaseUrl,
+      roomCreatorId: body?.roomCreatorId,
     });
   }
 

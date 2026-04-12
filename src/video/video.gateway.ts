@@ -167,6 +167,7 @@ const WHITEBOARD_MAX_VIEWPORT_BASE_HEIGHT = 4096;
 const WHITEBOARD_MAX_HISTORY_ENTRIES = 48;
 const WHITEBOARD_MAX_SELECTED_PAGES = 240;
 const WHITEBOARD_MAX_TEXT_CHARS = 240;
+const WHITEBOARD_OPERATION_LOCK_MS = 100; // Lock duration for concurrent operations
 const WHITEBOARD_TEXT_FONT_FAMILY_OPTIONS: WhiteboardTextFontFamily[] = [
   'sans',
   'serif',
@@ -228,6 +229,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private rooms = new Map<string, RoomInfo>();
   private readonly rateLimiter = new SocketRateLimiter();
+  private whiteboardLocks = new Map<string, NodeJS.Timeout>(); // tabId -> timeout
 
   constructor(
     @InjectModel(Chat.name)
@@ -1101,6 +1103,33 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return true;
   }
 
+  private getWhiteboardLockKey(roomId: string, tabId: string): string {
+    return `${roomId}:${tabId}`;
+  }
+
+  private acquireWhiteboardLock(roomId: string, tabId: string): boolean {
+    const lockKey = this.getWhiteboardLockKey(roomId, tabId);
+    // Check if already locked
+    if (this.whiteboardLocks.has(lockKey)) {
+      return false;
+    }
+    // Acquire lock with auto-release timeout
+    const timeout = setTimeout(() => {
+      this.whiteboardLocks.delete(lockKey);
+    }, WHITEBOARD_OPERATION_LOCK_MS);
+    this.whiteboardLocks.set(lockKey, timeout);
+    return true;
+  }
+
+  private releaseWhiteboardLock(roomId: string, tabId: string): void {
+    const lockKey = this.getWhiteboardLockKey(roomId, tabId);
+    const timeout = this.whiteboardLocks.get(lockKey);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.whiteboardLocks.delete(lockKey);
+    }
+  }
+
   private getPeerKey(client: Socket): string {
     return String(client.data?.user?._id || client.id);
   }
@@ -1175,37 +1204,64 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
           _id: payload.sub,
           email: payload.email,
         };
+        console.log(`[Video] connected: ${client.id} (user: ${payload.sub})`);
+      } else {
+        // Allow guest connections but mark as unauthenticated
+        client.data.user = null;
+        console.log(`[Video] connected: ${client.id} (guest)`);
       }
     } catch (err) {
       client.data.user = null;
       console.log(`[Video] auth error for ${client.id}:`, err.message);
+      // Send error to client before disconnect
+      client.emit('auth-error', { message: 'Authentication failed' });
+      // Disconnect after a brief delay to allow error to be sent
+      setTimeout(() => {
+        client.disconnect(true);
+      }, 100);
+      return;
     }
-    console.log(`[Video] connected: ${client.id}`);
   }
 
   handleDisconnect(client: Socket) {
     console.log(`[Video] disconnected: ${client.id}`);
+    const disconnectedAt = Date.now();
     this.rooms.forEach((room, roomId) => {
       if (room.peers.has(client.id)) {
         this.clearDisconnectTimer(room, client.id);
-        const userId =
-          room.peerUsers.get(client.id) || this.getSocketUserId(client);
+        const userId = room.peerUsers.get(client.id);
+        const displayName = room.peers.get(client.id);
+
         const timer = setTimeout(() => {
-          const currentPeerUserId = room.peerUsers.get(client.id);
-          if (
-            !room.peers.has(client.id) ||
-            (userId && currentPeerUserId && currentPeerUserId !== userId)
-          ) {
-            room.disconnectTimers.delete(client.id);
+          const currentSocketId = client.id;
+          // Double-check: if peer reconnected with same socket or was already removed
+          if (!room.peers.has(currentSocketId)) {
+            room.disconnectTimers.delete(currentSocketId);
+            return;
+          }
+          // Check if this is still the same user (socket id might be reused after reconnect)
+          const currentUserId = room.peerUsers.get(currentSocketId);
+          if (userId && currentUserId && currentUserId !== userId) {
+            room.disconnectTimers.delete(currentSocketId);
             return;
           }
 
-          this.removePeerFromRoom(room, roomId, client.id);
-          this.server.to(roomId).emit('peer-left', { peerId: client.id });
+          this.removePeerFromRoom(room, roomId, currentSocketId);
+          this.server.to(roomId).emit('peer-left', { peerId: currentSocketId });
+          console.log(`[Video] peer removed after grace: ${currentSocketId} (${displayName})`);
         }, DISCONNECT_GRACE_MS);
 
         room.disconnectTimers.set(client.id, timer);
+
+        // Notify other peers immediately about temporary disconnect
+        client.to(roomId).emit('peer-disconnected', {
+          peerId: client.id,
+          displayName,
+          willReconnect: true,
+        });
       }
+
+      // Clean up knock queue entries
       const knockEntries = Array.from(room.knockQueue.entries());
       const matchingKnockEntry = knockEntries.find(
         ([, entry]) => entry.socket.id === client.id,
@@ -1221,6 +1277,20 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
           });
           room.knockQueue.clear();
         }
+      }
+
+      // If creator disconnected, mark room for potential cleanup
+      if (room.creatorSocketId === client.id) {
+        console.log(`[Video] creator disconnected: ${client.id} (${roomId})`);
+        // Creator can reconnect within grace period
+        const creatorTimer = setTimeout(() => {
+          if (room.creatorSocketId === client.id && room.peers.size === 0) {
+            // Creator didn't reconnect and room is empty
+            this.rooms.delete(roomId);
+            console.log(`[Video] room deleted: ${roomId}`);
+          }
+        }, DISCONNECT_GRACE_MS * 2);
+        room.disconnectTimers.set(`creator:${client.id}`, creatorTimer as any);
       }
     });
   }
@@ -1283,6 +1353,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.emit('room-info', {
         title: existingRoom.title,
         isPrivate: existingRoom.isPrivate,
+        creatorUserId: existingRoom.creatorUserId,
       });
       this.emitWhiteboardState(client, existingRoom);
       if (existingRoom.whiteboard.isActive) {
@@ -1371,6 +1442,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.emit('room-info', {
         title: room.title,
         isPrivate: room.isPrivate,
+        creatorUserId: room.creatorUserId,
       });
       return;
     }
@@ -1395,6 +1467,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.emit('room-info', {
           title: room.title,
           isPrivate: room.isPrivate,
+          creatorUserId: room.creatorUserId,
         });
         return;
       }
@@ -1413,6 +1486,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.emit('room-info', {
         title: room.title,
         isPrivate: room.isPrivate,
+        creatorUserId: room.creatorUserId,
       });
       return;
     }
@@ -1420,7 +1494,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Open room: join immediately
     this.admitPeer(client, roomId, displayName, room);
     // Send room info to newly joined peer
-    client.emit('room-info', { title: room.title, isPrivate: room.isPrivate });
+    client.emit('room-info', {
+      title: room.title,
+      isPrivate: room.isPrivate,
+      creatorUserId: room.creatorUserId,
+    });
   }
 
   /** Internal: fully admit a peer into the room */
@@ -1451,6 +1529,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to(roomId).emit('room-info', {
       title: room.title,
       isPrivate: room.isPrivate,
+      creatorUserId: room.creatorUserId,
     });
   }
 
@@ -1539,11 +1618,13 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
           roomId,
           title: room.title,
           mediaLocked: false,
+          creatorUserId: room.creatorUserId,
         });
         this.admitPeer(entry.socket, roomId, entry.displayName, room);
         this.server.to(entry.socket.id).emit('room-info', {
           title: room.title,
           isPrivate: room.isPrivate,
+          creatorUserId: room.creatorUserId,
         });
       }
     }
@@ -2086,61 +2167,87 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    const stroke: WhiteboardStroke = {
-      id: strokeId,
-      tool: this.sanitizeWhiteboardTool(data?.tool),
-      color: this.sanitizeWhiteboardColor(data?.color),
-      size: this.sanitizeWhiteboardSize(data?.size),
-      points,
-      text: this.sanitizeWhiteboardText(data?.text),
-      fillColor: this.sanitizeWhiteboardFillColor(data?.fillColor),
-      fontFamily: this.sanitizeWhiteboardTextFontFamily(data?.fontFamily),
-      textSize: this.sanitizeWhiteboardTextSize(data?.textSize),
-      textAlign: this.sanitizeWhiteboardTextAlign(data?.textAlign),
-      fontPixelSize: this.sanitizeWhiteboardFontPixelSize(data?.fontPixelSize),
-      edgeStyle: this.sanitizeWhiteboardShapeEdge(data?.edgeStyle),
-      rotation: this.sanitizeWhiteboardRotation(data?.rotation),
-      createdAt: Date.now(),
-    };
-
-    room.whiteboard.ownerPeerId = client.id;
-    room.whiteboard.ownerUserId = this.getSocketUserId(client);
-    room.whiteboard.activeTabId = tab.id;
-    room.whiteboard.updatedAt = Date.now();
-
-    if (tab.type === 'board') {
-      this.pushWhiteboardHistory(
-        tab,
-        this.trimWhiteboardStrokes(
-          tab.strokes
-            .filter((existingStroke) => existingStroke.id !== strokeId)
-            .concat(stroke),
-        ),
-      );
-    } else {
-      const pageState = this.getWhiteboardPdfPage(tab, data?.pageNumber, true);
-      if (!pageState) {
-        return;
-      }
-      this.pushWhiteboardHistory(
-        pageState,
-        this.trimWhiteboardStrokes(
-          pageState.strokes
-            .filter((existingStroke) => existingStroke.id !== strokeId)
-            .concat(stroke),
-        ),
-      );
+    // Acquire lock for concurrent operation safety
+    const lockKey = this.getWhiteboardLockKey(roomId, tab.id);
+    if (!this.acquireWhiteboardLock(roomId, tab.id)) {
+      // If lock not acquired, operation is already in progress on this tab
+      // Client should retry
+      client.emit('whiteboard-error', { message: 'Operation in progress, please retry' });
+      return;
     }
 
-    client.to(roomId).emit('whiteboard-stroke-started', {
-      tabId: tab.id,
-      pageNumber:
-        tab.type === 'pdf'
-          ? this.sanitizeWhiteboardPageNumber(data?.pageNumber)
-          : undefined,
-      stroke,
-    });
-    this.emitWhiteboardState(roomId, room);
+    try {
+      // Check for existing stroke ID to prevent race condition
+      const existingStroke = tab.type === 'board'
+        ? tab.strokes.find((s) => s.id === strokeId)
+        : this.getWhiteboardPdfPage(tab, data?.pageNumber, false)?.strokes.find((s) => s.id === strokeId);
+
+      if (existingStroke) {
+        // Stroke already exists, skip
+        this.releaseWhiteboardLock(roomId, tab.id);
+        return;
+      }
+
+      const stroke: WhiteboardStroke = {
+        id: strokeId,
+        tool: this.sanitizeWhiteboardTool(data?.tool),
+        color: this.sanitizeWhiteboardColor(data?.color),
+        size: this.sanitizeWhiteboardSize(data?.size),
+        points,
+        text: this.sanitizeWhiteboardText(data?.text),
+        fillColor: this.sanitizeWhiteboardFillColor(data?.fillColor),
+        fontFamily: this.sanitizeWhiteboardTextFontFamily(data?.fontFamily),
+        textSize: this.sanitizeWhiteboardTextSize(data?.textSize),
+        textAlign: this.sanitizeWhiteboardTextAlign(data?.textAlign),
+        fontPixelSize: this.sanitizeWhiteboardFontPixelSize(data?.fontPixelSize),
+        edgeStyle: this.sanitizeWhiteboardShapeEdge(data?.edgeStyle),
+        rotation: this.sanitizeWhiteboardRotation(data?.rotation),
+        createdAt: Date.now(),
+      };
+
+      room.whiteboard.ownerPeerId = client.id;
+      room.whiteboard.ownerUserId = this.getSocketUserId(client);
+      room.whiteboard.activeTabId = tab.id;
+      room.whiteboard.updatedAt = Date.now();
+
+      if (tab.type === 'board') {
+        this.pushWhiteboardHistory(
+          tab,
+          this.trimWhiteboardStrokes(
+            tab.strokes
+              .filter((existingStroke) => existingStroke.id !== strokeId)
+              .concat(stroke),
+          ),
+        );
+      } else {
+        const pageState = this.getWhiteboardPdfPage(tab, data?.pageNumber, true);
+        if (!pageState) {
+          this.releaseWhiteboardLock(roomId, tab.id);
+          return;
+        }
+        this.pushWhiteboardHistory(
+          pageState,
+          this.trimWhiteboardStrokes(
+            pageState.strokes
+              .filter((existingStroke) => existingStroke.id !== strokeId)
+              .concat(stroke),
+          ),
+        );
+      }
+
+      client.to(roomId).emit('whiteboard-stroke-started', {
+        tabId: tab.id,
+        pageNumber:
+          tab.type === 'pdf'
+            ? this.sanitizeWhiteboardPageNumber(data?.pageNumber)
+            : undefined,
+        stroke,
+      });
+      this.emitWhiteboardState(roomId, room);
+    } finally {
+      // Always release the lock
+      this.releaseWhiteboardLock(roomId, tab.id);
+    }
   }
 
   @SubscribeMessage('whiteboard-stroke-append')

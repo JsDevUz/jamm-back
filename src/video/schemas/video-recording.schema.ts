@@ -15,6 +15,9 @@ export class VideoRecording {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
   ownerUserId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null, index: true })
+  roomCreatorId: Types.ObjectId | null;
+
   @Prop({
     type: String,
     enum: ['whiteboard', 'meet'],
