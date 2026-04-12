@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -44,12 +43,6 @@ export class LivekitService {
 
     const meet = await this.meetsService.findByRoomId(roomId);
     const creatorId = this.normalizeMeetCreatorId(meet?.creator);
-
-    if (meet?.isPrivate && creatorId && creatorId !== userId) {
-      throw new ForbiddenException(
-        'Private meet uchun LiveKit token faqat creator tomonidan olinadi',
-      );
-    }
 
     const participantName = this.resolveParticipantName(user, payload.participantName);
     const participantIdentity = `u-${userId}-${generateShortSlug(6)}`;
