@@ -80,6 +80,8 @@ interface WhiteboardBoardTab {
   zoom: number;
   viewportBaseWidth: number;
   viewportBaseHeight: number;
+  scrollLeftRatio: number;
+  scrollTopRatio: number;
   strokes: WhiteboardStroke[];
   undoStack: WhiteboardStroke[][];
   redoStack: WhiteboardStroke[][];
@@ -157,8 +159,8 @@ const WHITEBOARD_MAX_PAGE_STATES = 120;
 const WHITEBOARD_MAX_FILE_NAME_CHARS = 120;
 const WHITEBOARD_MAX_FILE_URL_CHARS = 2048;
 const WHITEBOARD_MAX_LIBRARY_ITEMS = 24;
-const WHITEBOARD_MIN_ZOOM = 0.5;
-const WHITEBOARD_MAX_ZOOM = 3;
+const WHITEBOARD_MIN_ZOOM = 0.1;
+const WHITEBOARD_MAX_ZOOM = 30;
 const WHITEBOARD_BOARD_POINT_MIN = -0.5;
 const WHITEBOARD_BOARD_POINT_MAX = 1.5;
 const WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH = 120;
@@ -193,6 +195,8 @@ const createWhiteboardBoardTab = (): WhiteboardBoardTab => ({
   zoom: 1,
   viewportBaseWidth: WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH,
   viewportBaseHeight: WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT,
+  scrollLeftRatio: 0,
+  scrollTopRatio: 0,
   strokes: [],
   undoStack: [],
   redoStack: [],
@@ -694,6 +698,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         typeof boardTab.viewportBaseHeight === 'number'
           ? this.sanitizeWhiteboardViewportBaseHeight(boardTab.viewportBaseHeight)
           : WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT;
+      boardTab.scrollLeftRatio =
+        typeof boardTab.scrollLeftRatio === 'number'
+          ? this.sanitizeWhiteboardViewportLeftRatio(boardTab.scrollLeftRatio)
+          : 0;
+      boardTab.scrollTopRatio =
+        typeof boardTab.scrollTopRatio === 'number'
+          ? this.sanitizeWhiteboardScrollRatio(boardTab.scrollTopRatio)
+          : 0;
       boardTab.undoStack = Array.isArray(boardTab.undoStack) ? boardTab.undoStack : [];
       boardTab.redoStack = Array.isArray(boardTab.redoStack) ? boardTab.redoStack : [];
     } else {
@@ -709,6 +721,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         typeof boardTab.viewportBaseHeight === 'number'
           ? this.sanitizeWhiteboardViewportBaseHeight(boardTab.viewportBaseHeight)
           : WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT;
+      boardTab.scrollLeftRatio =
+        typeof boardTab.scrollLeftRatio === 'number'
+          ? this.sanitizeWhiteboardViewportLeftRatio(boardTab.scrollLeftRatio)
+          : 0;
+      boardTab.scrollTopRatio =
+        typeof boardTab.scrollTopRatio === 'number'
+          ? this.sanitizeWhiteboardScrollRatio(boardTab.scrollTopRatio)
+          : 0;
       boardTab.undoStack = Array.isArray(boardTab.undoStack) ? boardTab.undoStack : [];
       boardTab.redoStack = Array.isArray(boardTab.redoStack) ? boardTab.redoStack : [];
     }
@@ -914,6 +934,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         zoom: tab.zoom,
         viewportBaseWidth: tab.viewportBaseWidth,
         viewportBaseHeight: tab.viewportBaseHeight,
+        scrollLeftRatio: tab.scrollLeftRatio,
+        scrollTopRatio: tab.scrollTopRatio,
         strokes: tab.strokes,
       };
     }
@@ -2014,6 +2036,8 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       zoom?: number;
       viewportBaseWidth?: number;
       viewportBaseHeight?: number;
+      scrollLeftRatio?: number;
+      scrollTopRatio?: number;
     },
   ) {
     this.rateLimiter.take(`video:whiteboard:board-zoom:${client.id}`, 1500, 60_000);
@@ -2040,6 +2064,16 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (typeof data?.viewportBaseHeight !== 'undefined') {
       tab.viewportBaseHeight = this.sanitizeWhiteboardViewportBaseHeight(
         data?.viewportBaseHeight,
+      );
+    }
+    if (typeof data?.scrollLeftRatio !== 'undefined') {
+      tab.scrollLeftRatio = this.sanitizeWhiteboardViewportLeftRatio(
+        data?.scrollLeftRatio,
+      );
+    }
+    if (typeof data?.scrollTopRatio !== 'undefined') {
+      tab.scrollTopRatio = this.sanitizeWhiteboardScrollRatio(
+        data?.scrollTopRatio,
       );
     }
 
