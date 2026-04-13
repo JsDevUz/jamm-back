@@ -60,6 +60,26 @@ export class MeetsService {
     return this.meetModel.findOne({ roomId }).exec();
   }
 
+  async findPublicByRoomId(roomId: string): Promise<any | null> {
+    const meet = (await this.meetModel
+      .findOne({ roomId })
+      .lean()
+      .exec()) as any | null;
+
+    if (!meet) {
+      return null;
+    }
+
+    return {
+      _id: meet._id,
+      roomId: meet.roomId,
+      title: meet.title,
+      creator: meet.creator,
+      isPrivate: meet.isPrivate,
+      createdAt: meet.createdAt,
+    };
+  }
+
   async remove(roomId: string, userId: string): Promise<void> {
     const result = await this.meetModel
       .deleteOne({ roomId, creator: userId })

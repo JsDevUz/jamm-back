@@ -31,14 +31,10 @@ export class LivekitService {
 
   async createToken(user: AuthenticatedUser, payload: CreateLivekitTokenDto) {
     const roomId = String(payload.roomId || '').trim();
-    const userId = String(user?._id || '').trim();
+    const userId = String(user?._id || '').trim() || `guest-${generateShortSlug(10)}`;
 
     if (!roomId) {
       throw new BadRequestException('Room ID topilmadi');
-    }
-
-    if (!userId) {
-      throw new BadRequestException('Foydalanuvchi aniqlanmadi');
     }
 
     const meet = await this.meetsService.findByRoomId(roomId);
@@ -59,6 +55,7 @@ export class LivekitService {
         roomId,
         creatorId: creatorId || null,
         isPrivate: Boolean(meet?.isPrivate),
+        isGuest: !user?._id,
       }),
     });
 
