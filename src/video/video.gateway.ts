@@ -100,6 +100,7 @@ interface WhiteboardPdfTab {
   viewportVisibleHeightRatio: number;
   viewportVisibleWidthRatio: number;
   viewportBaseWidth: number;
+  viewportBaseHeight: number;
   selectedPagesMode: 'all' | 'custom';
   selectedPages: number[];
   pages: WhiteboardPdfPageState[];
@@ -749,6 +750,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         typeof tab.viewportBaseWidth === 'number'
           ? this.sanitizeWhiteboardViewportBaseWidth(tab.viewportBaseWidth)
           : WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH;
+      (tab as WhiteboardPdfTab).viewportBaseHeight =
+        typeof (tab as WhiteboardPdfTab).viewportBaseHeight === 'number'
+          ? this.sanitizeWhiteboardViewportBaseHeight((tab as WhiteboardPdfTab).viewportBaseHeight)
+          : WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT;
       tab.selectedPages = this.sanitizeWhiteboardSelectedPages(tab.selectedPages);
       tab.selectedPagesMode =
         this.sanitizeWhiteboardSelectedPagesMode(
@@ -928,6 +933,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         viewportVisibleHeightRatio: tab.viewportVisibleHeightRatio,
         viewportVisibleWidthRatio: tab.viewportVisibleWidthRatio,
         viewportBaseWidth: tab.viewportBaseWidth,
+        viewportBaseHeight: tab.viewportBaseHeight,
         selectedPagesMode: tab.selectedPagesMode,
         selectedPages: tab.selectedPages,
         pages: tab.pages.map((page) => ({
@@ -1058,22 +1064,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const previousSocket = this.getSocketById(existingSocketId);
     previousSocket?.leave(roomId);
-  }
-
-  private findSharedRoomForPeers(
-    sourceSocketId: string,
-    targetSocketId: string,
-  ): {
-    roomId: string;
-    room: RoomInfo;
-  } | null {
-    for (const [roomId, room] of this.rooms.entries()) {
-      if (room.peers.has(sourceSocketId) && room.peers.has(targetSocketId)) {
-        return { roomId, room };
-      }
-    }
-
-    return null;
   }
 
   private canCreatorControlPeer(
@@ -1823,6 +1813,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       viewportVisibleHeightRatio: 0,
       viewportVisibleWidthRatio: 0,
       viewportBaseWidth: WHITEBOARD_MIN_VIEWPORT_BASE_WIDTH,
+      viewportBaseHeight: WHITEBOARD_MIN_VIEWPORT_BASE_HEIGHT,
       selectedPages: this.sanitizeWhiteboardSelectedPages(data?.selectedPages),
       selectedPagesMode:
         this.sanitizeWhiteboardSelectedPagesMode(data?.selectedPagesMode) === 'custom' ||
@@ -1951,6 +1942,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       viewportVisibleHeightRatio?: number;
       viewportVisibleWidthRatio?: number;
       viewportBaseWidth?: number;
+      viewportBaseHeight?: number;
     },
   ) {
     this.rateLimiter.take(`video:whiteboard:pdf-viewport:${client.id}`, 1500, 60_000);
@@ -1998,6 +1990,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (typeof data?.viewportBaseWidth !== 'undefined') {
       tab.viewportBaseWidth = this.sanitizeWhiteboardViewportBaseWidth(
         data?.viewportBaseWidth,
+      );
+    }
+    if (typeof data?.viewportBaseHeight !== 'undefined') {
+      tab.viewportBaseHeight = this.sanitizeWhiteboardViewportBaseHeight(
+        data?.viewportBaseHeight,
       );
     }
     room.whiteboard.activeTabId = tab.id;
@@ -2559,69 +2556,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.emitWhiteboardState(roomId, room);
   }
 
-  // ─── WebRTC Signaling ────────────────────────────────────────────────────────
-
-  @SubscribeMessage('offer')
-  handleOffer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { targetId: string; sdp: any },
-  ) {
-    this.rateLimiter.take(`video:offer:${client.id}`, 600, 60_000);
-    const targetId =
-      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
-    if (!targetId || targetId === client.id) {
-      return;
-    }
-    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
-    if (!sharedRoom) {
-      return;
-    }
-    this.server
-      .to(targetId)
-      .emit('offer', { senderId: client.id, sdp: data.sdp });
-  }
-
-  @SubscribeMessage('answer')
-  handleAnswer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { targetId: string; sdp: any },
-  ) {
-    this.rateLimiter.take(`video:answer:${client.id}`, 600, 60_000);
-    const targetId =
-      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
-    if (!targetId || targetId === client.id) {
-      return;
-    }
-    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
-    if (!sharedRoom) {
-      return;
-    }
-    this.server
-      .to(targetId)
-      .emit('answer', { senderId: client.id, sdp: data.sdp });
-  }
-
-  @SubscribeMessage('ice-candidate')
-  handleIceCandidate(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { targetId: string; candidate: any },
-  ) {
-    this.rateLimiter.take(`video:ice:${client.id}`, 4000, 60_000);
-    const targetId =
-      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
-    if (!targetId || targetId === client.id) {
-      return;
-    }
-    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
-    if (!sharedRoom) {
-      return;
-    }
-    this.server.to(targetId).emit('ice-candidate', {
-      senderId: client.id,
-      candidate: data.candidate,
-    });
-  }
-
   @SubscribeMessage('leave-room')
   handleLeaveRoom(
     @ConnectedSocket() client: Socket,
@@ -2642,7 +2576,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.leave(roomId);
   }
 
-  // ─── Screen Share Relay ─────────────────────────────────────────────────────
+  // ─── Screen Share Presence ──────────────────────────────────────────────────
 
   @SubscribeMessage('screen-share-started')
   handleScreenShareStarted(
@@ -2653,69 +2587,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = this.rooms.get(data.roomId);
     if (!this.isSocketInRoom(room, client.id)) return;
     client.to(data.roomId).emit('screen-share-started', { peerId: client.id });
-  }
-
-  @SubscribeMessage('screen-offer')
-  handleScreenOffer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { targetId: string; sdp: any },
-  ) {
-    this.rateLimiter.take(`video:screen-offer:${client.id}`, 600, 60_000);
-    const targetId =
-      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
-    if (!targetId || targetId === client.id) {
-      return;
-    }
-    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
-    if (!sharedRoom) {
-      return;
-    }
-    this.server.to(targetId).emit('screen-offer', {
-      senderId: client.id,
-      sdp: data.sdp,
-    });
-  }
-
-  @SubscribeMessage('screen-answer')
-  handleScreenAnswer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { targetId: string; sdp: any },
-  ) {
-    this.rateLimiter.take(`video:screen-answer:${client.id}`, 600, 60_000);
-    const targetId =
-      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
-    if (!targetId || targetId === client.id) {
-      return;
-    }
-    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
-    if (!sharedRoom) {
-      return;
-    }
-    this.server.to(targetId).emit('screen-answer', {
-      senderId: client.id,
-      sdp: data.sdp,
-    });
-  }
-
-  @SubscribeMessage('screen-ice-candidate')
-  handleScreenIceCandidate(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { targetId: string; candidate: any },
-  ) {
-    this.rateLimiter.take(`video:screen-ice:${client.id}`, 4000, 60_000);
-    const targetId =
-      typeof data?.targetId === 'string' ? data.targetId.trim() : '';
-    if (!targetId || targetId === client.id) {
-      return;
-    }
-    const sharedRoom = this.findSharedRoomForPeers(client.id, targetId);
-    if (!sharedRoom) {
-      return;
-    }
-    this.server.to(targetId).emit('screen-ice-candidate', {
-      senderId: client.id,
-      candidate: data.candidate,
-    });
   }
 
   @SubscribeMessage('screen-share-stopped')
