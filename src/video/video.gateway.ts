@@ -925,6 +925,27 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return 'Host';
   }
 
+  private buildWhiteboardSummary(room: RoomInfo) {
+    this.ensureWhiteboardState(room);
+    const activeTab =
+      room.whiteboard.tabs.find((tab) => tab.id === room.whiteboard.activeTabId) ||
+      room.whiteboard.tabs[0] ||
+      null;
+
+    return {
+      isActive: room.whiteboard.isActive,
+      ownerPeerId: room.whiteboard.ownerPeerId,
+      ownerDisplayName: this.resolveWhiteboardOwnerDisplayName(room),
+      activeTabId: room.whiteboard.activeTabId,
+      activeTabTitle:
+        typeof activeTab?.title === 'string' && activeTab.title.trim()
+          ? activeTab.title.trim()
+          : activeTab?.type === 'pdf'
+            ? 'PDF'
+            : 'Board',
+    };
+  }
+
   private serializeWhiteboardTab(tab: WhiteboardTab): Record<string, unknown> {
     if (tab.type === 'board') {
       return {
@@ -1366,6 +1387,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         title: existingRoom.title,
         isPrivate: existingRoom.isPrivate,
         creatorUserId: existingRoom.creatorUserId,
+        whiteboard: this.buildWhiteboardSummary(existingRoom),
       });
       this.emitWhiteboardState(client, existingRoom);
       if (existingRoom.whiteboard.isActive) {
@@ -1455,6 +1477,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         title: room.title,
         isPrivate: room.isPrivate,
         creatorUserId: room.creatorUserId,
+        whiteboard: this.buildWhiteboardSummary(room),
       });
       return;
     }
@@ -1480,6 +1503,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
           title: room.title,
           isPrivate: room.isPrivate,
           creatorUserId: room.creatorUserId,
+          whiteboard: this.buildWhiteboardSummary(room),
         });
         return;
       }
@@ -1499,6 +1523,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         title: room.title,
         isPrivate: room.isPrivate,
         creatorUserId: room.creatorUserId,
+        whiteboard: this.buildWhiteboardSummary(room),
       });
       return;
     }
@@ -1510,6 +1535,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       title: room.title,
       isPrivate: room.isPrivate,
       creatorUserId: room.creatorUserId,
+      whiteboard: this.buildWhiteboardSummary(room),
     });
   }
 
@@ -1542,6 +1568,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       title: room.title,
       isPrivate: room.isPrivate,
       creatorUserId: room.creatorUserId,
+      whiteboard: this.buildWhiteboardSummary(room),
     });
   }
 
