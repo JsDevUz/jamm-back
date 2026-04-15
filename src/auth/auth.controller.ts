@@ -68,19 +68,17 @@ export class AuthController {
   }
 
   private getMobileGoogleReturnUrl(request: ExpressRequest) {
-    const configured =
-      this.configService.get<string>('MOBILE_GOOGLE_REDIRECT_URI') ||
-      this.configService.get<string>('MOBILE_APP_SCHEME_URL') ||
-      '';
     const requested = String(request?.query?.return_url || '').trim();
-    const fallback = configured.trim() || 'jamm://auth/google/callback';
-    const candidate = requested || fallback;
 
-    if (/^jamm:\/\/[A-Za-z0-9\-._~/?#[\]@!$&'()*+,;=%]+$/.test(candidate)) {
-      return candidate;
+    if (!requested) {
+      return null;
     }
 
-    return fallback;
+    if (/^jamm:\/\/[A-Za-z0-9\-._~/?#[\]@!$&'()*+,;=%]+$/.test(requested)) {
+      return requested;
+    }
+
+    return null;
   }
 
   private buildGoogleErrorRedirect(request: ExpressRequest, message: string) {
@@ -217,13 +215,23 @@ export class AuthController {
       maxAge: 10 * 60 * 1000,
       path: '/',
     });
-    res.cookie('jamm_google_oauth_return', mobileReturnUrl, {
-      httpOnly: true,
-      secure: isSecureCookie,
-      sameSite: 'lax',
-      maxAge: 10 * 60 * 1000,
-      path: '/',
-    });
+
+    if (mobileReturnUrl) {
+      res.cookie('jamm_google_oauth_return', mobileReturnUrl, {
+        httpOnly: true,
+        secure: isSecureCookie,
+        sameSite: 'lax',
+        maxAge: 10 * 60 * 1000,
+        path: '/',
+      });
+    } else {
+      res.clearCookie('jamm_google_oauth_return', {
+        httpOnly: true,
+        secure: isSecureCookie,
+        sameSite: 'lax',
+        path: '/',
+      });
+    }
 
     const googleUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
     googleUrl.searchParams.set('client_id', clientId);
@@ -270,7 +278,10 @@ export class AuthController {
         return res.redirect(frontendError('Google auth state mos kelmadi'));
       }
 
-      const data = await this.authService.loginWithGoogleCode(code, redirectUri);
+      const data = await this.authService.loginWithGoogleCode(
+        code,
+        redirectUri,
+      );
 
       res.cookie(
         AUTH_COOKIE_NAME,
