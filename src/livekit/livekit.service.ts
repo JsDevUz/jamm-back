@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AccessToken } from 'livekit-server-sdk';
@@ -18,6 +19,8 @@ type AuthenticatedUser = {
 
 @Injectable()
 export class LivekitService {
+  private readonly logger = new Logger(LivekitService.name);
+
   constructor(
     private readonly configService: ConfigService,
     private readonly meetsService: MeetsService,
@@ -45,6 +48,10 @@ export class LivekitService {
     const apiKey = this.getRequiredConfig('LIVEKIT_API_KEY');
     const apiSecret = this.getRequiredConfig('LIVEKIT_API_SECRET');
     const ttl = this.getTokenTtl();
+
+    this.logger.log(
+      `Issuing LiveKit token room=${roomId} user=${userId} participant=${participantIdentity} publish=${payload.canPublish ?? true} subscribe=${payload.canSubscribe ?? true}`,
+    );
 
     const token = new AccessToken(apiKey, apiSecret, {
       identity: participantIdentity,
