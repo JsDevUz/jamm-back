@@ -130,6 +130,14 @@ interface WhiteboardState {
   updatedAt: number;
 }
 
+interface WhiteboardCursorPayload {
+  peerId: string;
+  displayName: string;
+  x: number;
+  y: number;
+  updatedAt: number;
+}
+
 interface RoomInfo {
   peers: Map<string, string>; // socketId -> displayName
   peerUsers: Map<string, string>; // socketId -> userId
@@ -379,6 +387,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     return normalized;
+  }
+
+  private sanitizeWhiteboardCursorUnit(rawValue: unknown): number {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    return Math.min(1, Math.max(0, value));
   }
 
   private sanitizeWhiteboardTabId(rawValue: unknown): string {
@@ -2109,6 +2126,57 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.whiteboard.ownerUserId = this.getSocketUserId(client);
     room.whiteboard.updatedAt = Date.now();
     this.emitWhiteboardState(roomId, room);
+  }
+
+  @SubscribeMessage('whiteboard-cursor')
+  handleWhiteboardCursor(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      x?: number;
+      y?: number;
+      peerId?: string;
+      displayName?: string;
+      updatedAt?: number;
+    },
+  ) {
+    this.rateLimiter.take(`video:whiteboard:cursor:${client.id}`, 1800, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client) || !room.whiteboard.isActive) {
+      return;
+    }
+
+    const payload: WhiteboardCursorPayload = {
+      peerId: client.id,
+      displayName: room.peers.get(client.id) || 'Host',
+      x: this.sanitizeWhiteboardCursorUnit(data?.x),
+      y: this.sanitizeWhiteboardCursorUnit(data?.y),
+      updatedAt: Date.now(),
+    };
+
+    client.to(roomId).emit('whiteboard-cursor', payload);
+  }
+
+  @SubscribeMessage('whiteboard-cursor-clear')
+  handleWhiteboardCursorClear(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      peerId?: string;
+    },
+  ) {
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!this.canManageWhiteboard(room, client)) {
+      return;
+    }
+
+    client.to(roomId).emit('whiteboard-cursor-clear', {
+      peerId: client.id,
+    });
   }
 
   @SubscribeMessage('whiteboard-undo')
