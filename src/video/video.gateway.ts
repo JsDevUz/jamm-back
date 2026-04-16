@@ -2361,7 +2361,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         );
       }
 
-      client.to(roomId).emit('whiteboard-stroke-started', {
+      client.to(roomId).except(client.id).emit('whiteboard-stroke-started', {
         tabId: tab.id,
         pageNumber:
           tab.type === 'pdf'
@@ -2434,7 +2434,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.whiteboard.activeTabId = tab.id;
     room.whiteboard.updatedAt = Date.now();
 
-    client.to(roomId).emit('whiteboard-stroke-appended', {
+    client.to(roomId).except(client.id).emit('whiteboard-stroke-appended', {
       tabId: tab.id,
       pageNumber: tab.type === 'pdf' ? pageNumber : undefined,
       strokeId,
@@ -2500,7 +2500,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.whiteboard.activeTabId = tab.id;
     room.whiteboard.updatedAt = Date.now();
 
-    client.to(roomId).emit('whiteboard-stroke-removed', {
+    client.to(roomId).except(client.id).emit('whiteboard-stroke-removed', {
       tabId: tab.id,
       pageNumber:
         tab.type === 'pdf'
@@ -2665,7 +2665,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.whiteboard.activeTabId = tab.id;
     room.whiteboard.updatedAt = Date.now();
 
-    client.to(roomId).emit('whiteboard-stroke-updated', {
+    client.to(roomId).except(client.id).emit('whiteboard-stroke-updated', {
       tabId: tab.id,
       pageNumber: tab.type === 'pdf' ? pageNumber : undefined,
       strokeId,
