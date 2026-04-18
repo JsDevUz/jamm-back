@@ -14,6 +14,7 @@ import {
   Headers,
   ForbiddenException,
   NotFoundException,
+  BadRequestException,
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -328,6 +329,25 @@ export class CoursesController {
     };
   }
 
+  private explainVideoProcessingFailure(error: any) {
+    const stderr = String(error?.stderr || error?.message || '').toLowerCase();
+
+    if (
+      stderr.includes('moov atom not found') ||
+      stderr.includes('invalid data found') ||
+      stderr.includes('error while decoding') ||
+      stderr.includes('could not find codec parameters')
+    ) {
+      return "Video fayli buzilgan yoki to'liq emas. Iltimos videoni qayta export qilib yuklang.";
+    }
+
+    if (stderr.includes('unknown decoder') || stderr.includes('unsupported')) {
+      return "Video codec yoki konteyner qo'llab-quvvatlanmaydi. MP4 (H.264 + AAC) formatida yuklang.";
+    }
+
+    return "Video brauzer uchun mos formatga o'girilmayapti. MP4 (H.264 + AAC) formatida qayta yuklab ko'ring.";
+  }
+
   private async transcodeVideoToHls(file: Express.Multer.File) {
     const tempRoot = await mkdtemp(join(tmpdir(), 'jamm-hls-'));
     const inputPath = join(
@@ -348,12 +368,12 @@ export class CoursesController {
     try {
       await writeFile(inputPath, file.buffer);
       const videoProfile = await this.getVideoStreamProfile(inputPath);
-      const shouldCopyVideo =
-        videoProfile.videoCodec === 'h264' &&
-        (!videoProfile.videoPixelFormat ||
-          videoProfile.videoPixelFormat.includes('420'));
+      if (!videoProfile.videoCodec) {
+        throw new BadRequestException(
+          "Video fayli ichida o'qiladigan video stream topilmadi. MP4 yoki MOV faylni qayta export qilib yuklang.",
+        );
+      }
       const hasAudio = Boolean(videoProfile.audioCodec);
-      const shouldCopyAudio = hasAudio && videoProfile.audioCodec === 'aac';
       await mkdir(outputDir, { recursive: true });
       await writeFile(keyPath, keyBuffer);
       await writeFile(
@@ -365,27 +385,22 @@ export class CoursesController {
         '-y',
         '-i',
         inputPath,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'superfast',
+        '-crf',
+        '23',
+        '-pix_fmt',
+        'yuv420p',
+        '-profile:v',
+        'main',
+        '-movflags',
+        '+faststart',
       ];
-
-      if (shouldCopyVideo) {
-        ffmpegArgs.push('-c:v', 'copy');
-      } else {
-        ffmpegArgs.push(
-          '-c:v',
-          'libx264',
-          '-preset',
-          'superfast',
-          '-crf',
-          '24',
-          '-pix_fmt',
-          'yuv420p',
-        );
-      }
 
       if (!hasAudio) {
         ffmpegArgs.push('-an');
-      } else if (shouldCopyAudio) {
-        ffmpegArgs.push('-c:a', 'copy');
       } else {
         ffmpegArgs.push('-c:a', 'aac', '-b:a', '96k', '-ac', '2');
       }
@@ -404,7 +419,11 @@ export class CoursesController {
         playlistPath,
       );
 
-      await execFileAsync('ffmpeg', ffmpegArgs);
+      try {
+        await execFileAsync('ffmpeg', ffmpegArgs);
+      } catch (error) {
+        throw new BadRequestException(this.explainVideoProcessingFailure(error));
+      }
 
       const fileNames = (await readdir(outputDir)).sort();
       const manifestContent = await readFile(playlistPath, 'utf8');
@@ -458,6 +477,23 @@ export class CoursesController {
     return 'jamm_course_playback';
   }
 
+  private deriveHlsKeyAssetFromMedia(media: any) {
+    const source =
+      String(media?.hlsKeyAsset || '').trim() ||
+      String(media?.fileUrl || '').trim() ||
+      String(media?.videoUrl || '').trim();
+    if (!source) return '';
+
+    const normalized = source.split('?')[0];
+    const lastSlashIndex = normalized.lastIndexOf('/');
+    if (lastSlashIndex < 0) return '';
+
+    const folder = normalized.slice(0, lastSlashIndex);
+    if (!folder) return '';
+
+    return `${folder}/enc.key`;
+  }
+
   private readCookie(req: ExpressRequest, name: string) {
     const raw = req.headers.cookie;
     if (!raw) return null;
@@ -493,6 +529,20 @@ export class CoursesController {
     }
 
     return headers;
+  }
+
+  /** Pipe an R2/B2 stream to the Express response with error handling. */
+  private pipeStreamSafe(stream: NodeJS.ReadableStream, res: Response): void {
+    stream.on('error', (err) => {
+      console.error('[pipeStreamSafe] stream error:', err?.message || err);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'text/plain' });
+        res.end('Stream error');
+      } else {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
   }
 
   @Get('file-proxy')
@@ -540,7 +590,7 @@ export class CoursesController {
       res.writeHead(200, headers);
     }
 
-    r2Data.stream.pipe(res);
+    this.pipeStreamSafe(r2Data.stream, res);
   }
 
   private async getAuthorizedLessonForUser(
@@ -818,6 +868,29 @@ export class CoursesController {
   @Post()
   create(@Request() req, @Body() body: CreateCourseDto) {
     return this.coursesService.create(req.user._id.toString(), body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('upload-image')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createSafeSingleFileMulterOptions(APP_LIMITS.courseImageBytes),
+    ),
+  )
+  async uploadImage(@UploadedFile() file: Express.Multer.File) {
+    await this.uploadValidationService.validateImageUpload(file, {
+      maxBytes: APP_LIMITS.courseImageBytes,
+      label: 'Kurs rasmi',
+    });
+
+    const imageUrl = await this.r2Service.uploadFile(file, 'courses');
+    return {
+      url: imageUrl,
+      fileName: file.originalname,
+      fileSize: file.size,
+    };
   }
 
   @UseGuards(JwtAuthGuard)
@@ -1333,7 +1406,7 @@ export class CoursesController {
       res.writeHead(200, headers);
     }
 
-    r2Data.stream.pipe(res);
+    this.pipeStreamSafe(r2Data.stream, res);
   }
 
   @Get(':id/lessons/:lessonId/hls-key')
@@ -1365,11 +1438,14 @@ export class CoursesController {
       mediaId,
     );
 
-    if (!media.hlsKeyAsset) {
+    const resolvedHlsKeyAsset =
+      String(media?.hlsKeyAsset || '').trim() || this.deriveHlsKeyAssetFromMedia(media);
+
+    if (!resolvedHlsKeyAsset) {
       throw new NotFoundException('HLS key topilmadi');
     }
 
-    const keyData = await this.r2Service.getFileStream(media.hlsKeyAsset);
+    const keyData = await this.r2Service.getFileStream(resolvedHlsKeyAsset);
 
     res.writeHead(
       200,
@@ -1379,7 +1455,7 @@ export class CoursesController {
       }),
     );
 
-    keyData.stream.pipe(res);
+    this.pipeStreamSafe(keyData.stream, res);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -1537,7 +1613,7 @@ export class CoursesController {
       res.writeHead(200, headers);
     }
 
-    r2Data.stream.pipe(res);
+    this.pipeStreamSafe(r2Data.stream, res);
   }
 
   @Get(
@@ -1587,7 +1663,7 @@ export class CoursesController {
         'Content-Length': keyData.contentLength,
       }),
     );
-    keyData.stream.pipe(res);
+    this.pipeStreamSafe(keyData.stream, res);
   }
 
   @Get(
@@ -1649,7 +1725,7 @@ export class CoursesController {
       res.writeHead(200, headers);
     }
 
-    r2Data.stream.pipe(res);
+    this.pipeStreamSafe(r2Data.stream, res);
   }
 
   @Get(':id/lessons/:lessonId/stream')
@@ -1705,7 +1781,7 @@ export class CoursesController {
     }
 
     // Pipe directly to express response
-    r2Data.stream.pipe(res);
+    this.pipeStreamSafe(r2Data.stream, res);
   }
 
   /* ---- ENROLLMENT ---- */

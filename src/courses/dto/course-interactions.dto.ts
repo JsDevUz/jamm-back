@@ -19,6 +19,22 @@ export class MarkAttendanceDto {
   @IsNumber()
   @Min(0)
   progressPercent?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  lastPositionSeconds?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  lessonDurationSeconds?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1)
+  watchIncrement?: number;
 }
 
 export class SetAttendanceStatusDto {

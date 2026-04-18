@@ -22,6 +22,7 @@ import {
   CreateChatDto,
   EditChatDto,
   EditMessageDto,
+  RegisterE2EPublicKeyDto,
   RequestJoinCallDto,
   RespondJoinRequestDto,
   SendMessageDto,
@@ -296,5 +297,49 @@ export class ChatsController {
   @Delete(':id')
   deleteChat(@Request() req, @Param('id') id: string) {
     return this.chatsService.deleteChat(id, req.user._id.toString());
+  }
+
+  // ─── E2EE Endpoints ─────────────────────────────────────────────────────────
+
+  /**
+   * GET /chats/:id/e2e
+   * Returns E2EE status and both participants' public keys.
+   * Client calls this on chat open to fetch the other party's public key.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/e2e')
+  getE2EStatus(@Request() req, @Param('id') id: string) {
+    return this.chatsService.getE2EStatus(id, req.user._id.toString());
+  }
+
+  /**
+   * POST /chats/:id/e2e/key
+   * Register or refresh the caller's ECDH P-256 public key.
+   * When both participants have registered, E2EE is automatically enabled
+   * and a `chat_e2e_updated` socket event is emitted to both sides.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/e2e/key')
+  registerE2EPublicKey(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: RegisterE2EPublicKeyDto,
+  ) {
+    return this.chatsService.registerE2EPublicKey(
+      id,
+      req.user._id.toString(),
+      body.publicKey,
+    );
+  }
+
+  /**
+   * DELETE /chats/:id/e2e
+   * Disable E2EE and clear stored public keys for this chat.
+   * Subsequent messages use server-side AES encryption.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/e2e')
+  disableE2E(@Request() req, @Param('id') id: string) {
+    return this.chatsService.disableE2E(id, req.user._id.toString());
   }
 }

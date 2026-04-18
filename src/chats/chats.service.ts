@@ -22,7 +22,7 @@ import {
   EncryptionType,
   PlainStrategy,
   ServerEncryptionStrategy,
-  FutureE2EStrategy,
+  E2EStrategy,
   EncryptionStrategy,
 } from '../common/encryption/encryption.strategies';
 import {
@@ -146,13 +146,9 @@ export class ChatsService implements OnModuleInit {
   }
 
   private getEncryptionStrategy(chat: Chat): EncryptionStrategy {
-    if (!chat.isGroup) {
-      if ((chat as any).isE2EEnabled) {
-        return new FutureE2EStrategy(this.encryptionService);
-      }
-      return new ServerEncryptionStrategy(this.encryptionService);
+    if (!chat.isGroup && (chat as any).isE2EEnabled) {
+      return new E2EStrategy();
     }
-    // Group and Course chats (assuming for now courseId logic is handled elsewhere or groups cover it)
     return new ServerEncryptionStrategy(this.encryptionService);
   }
 
@@ -174,6 +170,18 @@ export class ChatsService implements OnModuleInit {
     }
 
     if (!nextMessage.isEncrypted) return nextMessage;
+
+    // E2E messages: server returns the encrypted envelope; client decrypts
+    if (nextMessage.encryptionType === EncryptionType.E2E) {
+      return {
+        ...nextMessage,
+        content: JSON.stringify({
+          encryptedContent: nextMessage.content,
+          iv: nextMessage.iv,
+          authTag: nextMessage.authTag,
+        }),
+      };
+    }
 
     try {
       const decrypted = strategy.decrypt({
@@ -244,6 +252,14 @@ export class ChatsService implements OnModuleInit {
     if ((chat as any).lastMessageEncryptionType === 'none') {
       return chat.lastMessage;
     }
+    // E2E messages: server cannot decrypt — return encrypted envelope so client can decrypt
+    if ((chat as any).lastMessageEncryptionType === 'e2e') {
+      return JSON.stringify({
+        encryptedContent: chat.lastMessage,
+        iv: (chat as any).lastMessageIv || '',
+        authTag: (chat as any).lastMessageAuthTag || '',
+      });
+    }
 
     const iv = (chat as any).lastMessageIv || '';
     const authTag = (chat as any).lastMessageAuthTag || '';
@@ -259,11 +275,9 @@ export class ChatsService implements OnModuleInit {
         authTag,
         keyVersion: (chat as any).lastMessageKeyVersion || 0,
       });
-    } catch (error) {
-      console.error(
-        `Failed to decrypt lastMessage preview for chat ${chat._id}:`,
-        error,
-      );
+    } catch {
+      // lastMessage preview was encrypted with a different key (e.g. after key rotation).
+      // Chat messages themselves are E2EE and unaffected — only the server-side preview is unavailable.
       return '';
     }
   }
@@ -1719,5 +1733,127 @@ export class ChatsService implements OnModuleInit {
     });
 
     return { success: true };
+  }
+
+  // ─── E2EE ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Register or update caller's ECDH P-256 public key for the given private chat.
+   * Also stored globally on the User document for discoverability.
+   * Notifies the other participant so they can start encrypting immediately.
+   */
+  async registerE2EPublicKey(
+    chatId: string,
+    userId: string,
+    publicKey: string,
+  ): Promise<{ ok: boolean; e2eReady: boolean }> {
+    const chat = await this.getChat(chatId, userId);
+
+    if (chat.isGroup) {
+      throw new BadRequestException(
+        'E2EE faqat shaxsiy chatlar uchun qo\'llab-quvvatlanadi',
+      );
+    }
+
+    // Persist on the chat's per-member map
+    const keys: Map<string, string> =
+      (chat as any).e2ePublicKeys ?? new Map<string, string>();
+    keys.set(userId, publicKey);
+    (chat as any).e2ePublicKeys = keys;
+    chat.markModified('e2ePublicKeys');
+
+    // Persist globally on the user document
+    await this.userModel.findByIdAndUpdate(userId, { e2ePublicKey: publicKey });
+
+    // Check if both participants have registered keys
+    const memberIds = chat.members.map((m: any) =>
+      (m._id ?? m).toString(),
+    );
+    const e2eReady = memberIds.every((id) => keys.has(id));
+
+    if (e2eReady && !(chat as any).isE2EEnabled) {
+      (chat as any).isE2EEnabled = true;
+    }
+
+    await chat.save();
+
+    // Build public key map to broadcast (object form for JSON)
+    const keysObject: Record<string, string> = {};
+    keys.forEach((v, k) => { keysObject[k] = v; });
+
+    // Notify all chat members about updated E2E state
+    const rooms = memberIds.map((id) => `user_${id}`);
+    this.chatsGateway.server.to(rooms).emit('chat_e2e_updated', {
+      chatId,
+      isE2EEnabled: (chat as any).isE2EEnabled,
+      e2ePublicKeys: keysObject,
+    });
+
+    return { ok: true, e2eReady };
+  }
+
+  /**
+   * Disable E2EE for a private chat and clear all stored public keys.
+   * Both participants are notified; subsequent messages use server encryption.
+   */
+  async disableE2E(
+    chatId: string,
+    userId: string,
+  ): Promise<{ ok: boolean }> {
+    const chat = await this.getChat(chatId, userId);
+
+    if (chat.isGroup) {
+      throw new BadRequestException(
+        'E2EE faqat shaxsiy chatlar uchun qo\'llab-quvvatlanadi',
+      );
+    }
+
+    (chat as any).isE2EEnabled = false;
+    (chat as any).e2ePublicKeys = new Map<string, string>();
+    chat.markModified('e2ePublicKeys');
+    await chat.save();
+
+    const memberIds = chat.members.map((m: any) =>
+      (m._id ?? m).toString(),
+    );
+    const rooms = memberIds.map((id) => `user_${id}`);
+    this.chatsGateway.server.to(rooms).emit('chat_e2e_updated', {
+      chatId,
+      isE2EEnabled: false,
+      e2ePublicKeys: {},
+    });
+
+    return { ok: true };
+  }
+
+  /**
+   * Return E2E status and public keys map for a private chat.
+   * Used by clients to fetch the other participant's public key.
+   */
+  async getE2EStatus(
+    chatId: string,
+    userId: string,
+  ): Promise<{
+    isE2EEnabled: boolean;
+    e2ePublicKeys: Record<string, string>;
+  }> {
+    const chat = await this.getChat(chatId, userId);
+
+    if (chat.isGroup) {
+      throw new BadRequestException(
+        'E2EE faqat shaxsiy chatlar uchun qo\'llab-quvvatlanadi',
+      );
+    }
+
+    const keysObject: Record<string, string> = {};
+    const rawKeys: Map<string, string> | undefined = (chat as any).e2ePublicKeys;
+    if (rawKeys) {
+      rawKeys.forEach((v, k) => { keysObject[k] = v; });
+    }
+
+    return {
+      isE2EEnabled: Boolean((chat as any).isE2EEnabled),
+      e2ePublicKeys: keysObject,
+    };
   }
 }

@@ -16,11 +16,28 @@ export class EncryptionService {
   private readonly currentKeyVersion = 1;
 
   constructor(private configService: ConfigService) {
-    const secret =
-      this.configService.get<string>('ENCRYPTION_KEY') ||
-      'default-very-secure-key-32-chars-!!';
-    // Ensure the key is exactly 32 bytes for aes-256
-    this.key = crypto.scryptSync(secret, 'salt', 32);
+    const secret = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!secret) {
+      throw new Error(
+        'ENCRYPTION_KEY environment variable is required but not set.',
+      );
+    }
+
+    const saltHex = this.configService.get<string>('ENCRYPTION_SALT');
+    if (!saltHex) {
+      throw new Error(
+        'ENCRYPTION_SALT environment variable is required but not set.',
+      );
+    }
+
+    const salt = Buffer.from(saltHex, 'hex');
+    if (salt.length < 16) {
+      throw new Error(
+        'ENCRYPTION_SALT must be at least 32 hex chars (16 bytes).',
+      );
+    }
+
+    this.key = crypto.scryptSync(secret, salt, 32);
   }
 
   encrypt(text: string): EncryptedData {
@@ -63,8 +80,12 @@ export class EncryptionService {
    * Using SHA-256 and a static salt (from config) is recommended.
    */
   hashToken(token: string): string {
-    const salt =
-      this.configService.get<string>('SEARCH_SALT') || 'default-search-salt-!!';
+    const salt = this.configService.get<string>('SEARCH_SALT');
+    if (!salt) {
+      throw new Error(
+        'SEARCH_SALT environment variable is required but not set.',
+      );
+    }
     return crypto
       .createHmac('sha256', salt)
       .update(token)

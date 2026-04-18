@@ -2,10 +2,13 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
+  Param,
   Body,
   UseGuards,
   Request,
   Res,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -28,6 +31,7 @@ import { ConfigService } from '@nestjs/config';
 import { AppSettingsService } from '../app-settings/app-settings.service';
 import { JwtService } from '@nestjs/jwt';
 import type { Request as ExpressRequest } from 'express';
+import { SessionService } from './session.service';
 
 @Controller('auth')
 export class AuthController {
@@ -36,6 +40,7 @@ export class AuthController {
     private configService: ConfigService,
     private appSettingsService: AppSettingsService,
     private jwtService: JwtService,
+    private sessionService: SessionService,
   ) {}
 
   private buildGoogleRedirectUri(request: ExpressRequest) {
@@ -136,8 +141,9 @@ export class AuthController {
   async login(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) res: Response,
+    @Request() req: ExpressRequest,
   ) {
-    const data = await this.authService.login(loginDto);
+    const data = await this.authService.login(loginDto, req);
     res.cookie(
       AUTH_COOKIE_NAME,
       data.access_token,
@@ -160,7 +166,7 @@ export class AuthController {
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async verify(@Request() req, @Res({ passthrough: true }) res: Response) {
     const { token } = req.params;
-    const data = await this.authService.verifyEmail(token);
+    const data = await this.authService.verifyEmail(token, req);
     res.cookie(
       AUTH_COOKIE_NAME,
       data.access_token,
@@ -281,6 +287,7 @@ export class AuthController {
       const data = await this.authService.loginWithGoogleCode(
         code,
         redirectUri,
+        req,
       );
 
       res.cookie(
@@ -338,7 +345,26 @@ export class AuthController {
 
   @Post('logout')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  async logout(@Res({ passthrough: true }) res: Response) {
+  async logout(
+    @Request() req: ExpressRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    // Delete session if tokenId is in JWT payload
+    const rawToken = extractCookieValue(
+      req?.headers?.cookie || '',
+      AUTH_COOKIE_NAME,
+    );
+    if (rawToken) {
+      try {
+        const decoded = this.jwtService.decode(rawToken) as { tokenId?: string } | null;
+        if (decoded?.tokenId) {
+          void this.sessionService.deleteSessionByTokenId(decoded.tokenId);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     res.clearCookie(
       AUTH_COOKIE_NAME,
       buildAuthCookieOptions(this.configService),
@@ -347,6 +373,99 @@ export class AuthController {
       APP_UNLOCK_COOKIE_NAME,
       buildAppUnlockCookieOptions(this.configService),
     );
+    return { success: true };
+  }
+
+  // ──────────────────────────────────────────────
+  // Sessions endpoints
+  // ──────────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Get('sessions')
+  async getSessions(@Request() req) {
+    const userId = String(req.user._id);
+    const sessions = await this.sessionService.getUserSessions(userId);
+
+    // Identify current session from JWT
+    let currentTokenId: string | null = null;
+    const rawToken = extractCookieValue(
+      req?.headers?.cookie || '',
+      AUTH_COOKIE_NAME,
+    );
+    if (rawToken) {
+      try {
+        const decoded = this.jwtService.decode(rawToken) as { tokenId?: string } | null;
+        currentTokenId = decoded?.tokenId || null;
+      } catch {
+        // ignore
+      }
+    }
+
+    return sessions.map((s: any) => ({
+      _id: s._id,
+      deviceType: s.deviceType,
+      deviceName: s.deviceName,
+      ipAddress: s.ipAddress,
+      country: s.country,
+      city: s.city,
+      lastUsedAt: s.lastUsedAt,
+      createdAt: s.createdAt,
+      isCurrent: s.tokenId === currentTokenId,
+    }));
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('sessions/:sessionId')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async deleteSession(
+    @Request() req,
+    @Param('sessionId') sessionId: string,
+  ) {
+    const userId = String(req.user._id);
+
+    // Only allow deletion if current session is at least 1 day old
+    // (the user opened a new session at least 1 day ago)
+    const rawToken = extractCookieValue(
+      req?.headers?.cookie || '',
+      AUTH_COOKIE_NAME,
+    );
+    let currentTokenId: string | null = null;
+    let currentSessionCreatedAt: Date | null = null;
+    if (rawToken) {
+      try {
+        const decoded = this.jwtService.decode(rawToken) as { tokenId?: string } | null;
+        currentTokenId = decoded?.tokenId || null;
+      } catch {
+        // ignore
+      }
+    }
+
+    if (currentTokenId) {
+      const allSessions = await this.sessionService.getUserSessions(userId);
+      const current = (allSessions as any[]).find(
+        (s) => s.tokenId === currentTokenId,
+      );
+      if (current) {
+        currentSessionCreatedAt = current.createdAt as Date;
+      }
+    }
+
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const sessionAge = currentSessionCreatedAt
+      ? Date.now() - new Date(currentSessionCreatedAt).getTime()
+      : 0;
+
+    if (sessionAge < oneDayMs) {
+      throw new ForbiddenException(
+        "Boshqa sessionlarni o'chirish uchun joriy sessioningiz kamida 1 kun bo'lishi kerak.",
+      );
+    }
+
+    const deleted = await this.sessionService.deleteSession(sessionId, userId);
+    if (!deleted) {
+      throw new ForbiddenException("Session topilmadi yoki sizga tegishli emas.");
+    }
+
     return { success: true };
   }
 }

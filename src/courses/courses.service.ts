@@ -214,6 +214,11 @@ export class CoursesService implements OnModuleInit {
       image: String(course?.image || '').trim(),
       gradient: String(course?.gradient || '').trim(),
       category: String(course?.category || 'IT').trim() || 'IT',
+      lessonLanguage: String(course?.lessonLanguage || '').trim(),
+      deliveryType:
+        String(course?.deliveryType || 'recorded').trim() === 'ongoing'
+          ? 'ongoing'
+          : 'recorded',
       urlSlug: String(course?.urlSlug || '').trim(),
       accessType: course?.accessType || 'free_request',
       price: Number(course?.price || 0),
@@ -311,23 +316,69 @@ export class CoursesService implements OnModuleInit {
       .updateOne({ _id: courseId }, { $set: this.pickPersistedCourseFields(course) })
       .exec();
 
+    const currentMemberUserIds = memberRows.map((r: any) => r.userId);
+    const currentLessonIds = lessonRows.map((r: any) => r.lessonId);
+    const currentHomeworkIds = homeworkRows.map((r: any) => r.assignmentId);
+
     await Promise.all([
-      this.courseMemberRecordModel.deleteMany({ courseId }),
-      this.courseLessonRecordModel.deleteMany({ courseId }),
-      this.lessonHomeworkRecordModel.deleteMany({ courseId }),
+      // Remove stale member records not in the current set
+      currentMemberUserIds.length
+        ? this.courseMemberRecordModel.deleteMany({
+            courseId,
+            userId: { $nin: currentMemberUserIds },
+          })
+        : this.courseMemberRecordModel.deleteMany({ courseId }),
+      // Remove stale lesson records not in the current set
+      currentLessonIds.length
+        ? this.courseLessonRecordModel.deleteMany({
+            courseId,
+            lessonId: { $nin: currentLessonIds },
+          })
+        : this.courseLessonRecordModel.deleteMany({ courseId }),
+      // Remove stale homework records not in the current set
+      currentHomeworkIds.length
+        ? this.lessonHomeworkRecordModel.deleteMany({
+            courseId,
+            assignmentId: { $nin: currentHomeworkIds },
+          })
+        : this.lessonHomeworkRecordModel.deleteMany({ courseId }),
     ]);
 
-    if (memberRows.length) {
-      await this.courseMemberRecordModel.insertMany(memberRows);
-    }
-
-    if (lessonRows.length) {
-      await this.courseLessonRecordModel.insertMany(lessonRows);
-    }
-
-    if (homeworkRows.length) {
-      await this.lessonHomeworkRecordModel.insertMany(homeworkRows);
-    }
+    await Promise.all([
+      memberRows.length
+        ? this.courseMemberRecordModel.bulkWrite(
+            memberRows.map((row: any) => ({
+              updateOne: {
+                filter: { courseId: row.courseId, userId: row.userId },
+                update: { $set: row },
+                upsert: true,
+              },
+            })),
+          )
+        : Promise.resolve(),
+      lessonRows.length
+        ? this.courseLessonRecordModel.bulkWrite(
+            lessonRows.map((row: any) => ({
+              updateOne: {
+                filter: { courseId: row.courseId, lessonId: row.lessonId },
+                update: { $set: row },
+                upsert: true,
+              },
+            })),
+          )
+        : Promise.resolve(),
+      homeworkRows.length
+        ? this.lessonHomeworkRecordModel.bulkWrite(
+            homeworkRows.map((row: any) => ({
+              updateOne: {
+                filter: { courseId: row.courseId, assignmentId: row.assignmentId },
+                update: { $set: row },
+                upsert: true,
+              },
+            })),
+          )
+        : Promise.resolve(),
+    ]);
   }
 
   private async hydrateCourseCollections(course: any) {
@@ -601,6 +652,42 @@ export class CoursesService implements OnModuleInit {
             (item: any) => item.status === 'absent',
           ).length,
         },
+        // Full attendance array only for course owner (admin) — needed for teacher dashboard.
+        attendance: isAdmin
+          ? (lesson.attendance || []).map((item: any) => ({
+              userId: item.userId,
+              progressPercent: Math.min(100, Math.max(0, Number(item.progressPercent || 0))),
+              status: item.status || null,
+              watchCount: Number(item.watchCount || 0),
+              lastPositionSeconds: Number(item.lastPositionSeconds || 0),
+              maxPositionSeconds: Number(item.maxPositionSeconds || 0),
+              lessonDurationSeconds: Number(item.lessonDurationSeconds || 0),
+              lastWatchedAt: item.lastWatchedAt || item.markedAt || null,
+              firstWatchedAt: item.firstWatchedAt || null,
+            }))
+          : [],
+        oralAssessments: isAdmin
+          ? (lesson.oralAssessments || []).map((item: any) => ({
+              userId: item.userId,
+              score:
+                item.score === null || item.score === undefined
+                  ? null
+                  : Number(item.score),
+              note: item.note || "",
+              createdAt: item.createdAt || null,
+              updatedAt: item.updatedAt || item.createdAt || null,
+            }))
+          : [],
+        selfAttendance: (() => {
+          const record = (lesson.attendance || []).find(
+            (item: any) => item.userId?.toString() === userId,
+          );
+          if (!record) return null;
+          return {
+            progressPercent: Math.min(100, Math.max(0, Number(record.progressPercent || 0))),
+            status: record.status || null,
+          };
+        })(),
       };
     });
 
@@ -664,6 +751,21 @@ export class CoursesService implements OnModuleInit {
     return (lesson.attendance || []).find(
       (item: any) => item.userId?.toString() === userId,
     );
+  }
+
+  private sanitizePlaybackSecond(value: any, lessonDurationSeconds = 0) {
+    const normalized = Math.max(0, Number(value || 0));
+    if (!lessonDurationSeconds) {
+      return Number(normalized.toFixed(2));
+    }
+
+    return Number(Math.min(normalized, lessonDurationSeconds).toFixed(2));
+  }
+
+  private resolveAttendanceStatus(currentStatus: string, progressPercent: number) {
+    if (progressPercent >= 70) return 'present';
+    if (progressPercent > 0) return 'late';
+    return currentStatus || 'absent';
   }
 
   private normalizeHomeworkAssignments(lesson: any) {
@@ -859,6 +961,11 @@ export class CoursesService implements OnModuleInit {
       showResults: linkedTest?.showResults !== false,
       requiredToUnlock: linkedTest?.requiredToUnlock !== false,
       selfProgress: this.serializeLinkedTestProgress(selfProgress),
+      progress: isOwner
+        ? (linkedTest?.progress || []).map((item: any) =>
+            this.serializeLinkedTestProgress(item),
+          )
+        : undefined,
       attemptsCount: isOwner ? Number((linkedTest?.progress || []).length) : undefined,
       passedCount: isOwner
         ? (linkedTest?.progress || []).filter((item: any) => item?.passed).length
@@ -880,7 +987,7 @@ export class CoursesService implements OnModuleInit {
       }
 
       for (const linkedTest of this.normalizeLessonLinkedTests(previousLesson)) {
-        if (linkedTest?.requiredToUnlock === false) {
+        if (Number(linkedTest?.minimumScore || 0) <= 0) {
           continue;
         }
 
@@ -1406,6 +1513,8 @@ export class CoursesService implements OnModuleInit {
       description?: string;
       image?: string;
       category?: string;
+      lessonLanguage?: string;
+      deliveryType?: 'ongoing' | 'recorded';
       price?: number;
       accessType?: string;
       urlSlug?: string;
@@ -1425,6 +1534,7 @@ export class CoursesService implements OnModuleInit {
       dto.category,
       APP_TEXT_LIMITS.courseCategoryChars,
     );
+    assertMaxChars('Dars tili', dto.lessonLanguage, 40);
 
     const limit = getTierLimit(APP_LIMITS.coursesCreated, user.premiumStatus);
 
@@ -1453,6 +1563,8 @@ export class CoursesService implements OnModuleInit {
 
     const createdCourse = await this.courseModel.create({
       ...dto,
+      lessonLanguage: String(dto.lessonLanguage || '').trim(),
+      deliveryType: dto.deliveryType === 'ongoing' ? 'ongoing' : 'recorded',
       urlSlug: finalSlug,
       gradient,
       createdBy: new Types.ObjectId(userId),
@@ -1628,6 +1740,7 @@ export class CoursesService implements OnModuleInit {
       streamAssets?: string[];
       hlsKeyAsset?: string;
       mediaItems?: {
+        mediaId?: string;
         title?: string;
         videoUrl?: string;
         fileUrl?: string;
@@ -1660,6 +1773,7 @@ export class CoursesService implements OnModuleInit {
       videoUrl: lesson.videoUrl || '',
       fileUrl: lesson.fileUrl || '',
       mediaItems: this.normalizeLessonMediaItems(lesson).map((item: any) => ({
+        mediaId: item?._id?.toString?.() || '',
         videoUrl: item.videoUrl || '',
         fileUrl: item.fileUrl || '',
         durationSeconds: Number(item.durationSeconds || 0),
@@ -1687,20 +1801,35 @@ export class CoursesService implements OnModuleInit {
     }
 
     if (dto.mediaItems !== undefined) {
+      const existingMediaById = new Map(
+        this.normalizeLessonMediaItems(lesson).map((item: any) => [
+          item?._id?.toString?.() || '',
+          item,
+        ]),
+      );
       const normalizedMediaItems = Array.isArray(dto.mediaItems)
         ? dto.mediaItems
-            .map((item) => ({
-              _id: new Types.ObjectId(),
-              title: String(item?.title || dto.title || lesson.title || '').trim(),
-              videoUrl: String(item?.videoUrl || '').trim(),
-              fileUrl: String(item?.fileUrl || '').trim(),
-              fileName: String(item?.fileName || '').trim(),
-              fileSize: Math.max(0, Number(item?.fileSize || 0)),
-              durationSeconds: Math.max(0, Number(item?.durationSeconds || 0)),
-              streamType: item?.streamType === 'hls' ? 'hls' : 'direct',
-              streamAssets: Array.isArray(item?.streamAssets) ? item.streamAssets : [],
-              hlsKeyAsset: String(item?.hlsKeyAsset || '').trim(),
-            }))
+            .map((item) => {
+              const mediaId = String(item?.mediaId || '').trim();
+              const existingItem = mediaId ? (existingMediaById.get(mediaId) as any) : null;
+              return {
+                _id:
+                  mediaId && Types.ObjectId.isValid(mediaId)
+                    ? new Types.ObjectId(mediaId)
+                    : new Types.ObjectId(),
+                title: String(item?.title || dto.title || lesson.title || '').trim(),
+                videoUrl: String(item?.videoUrl || '').trim(),
+                fileUrl: String(item?.fileUrl || '').trim(),
+                fileName: String(item?.fileName || '').trim(),
+                fileSize: Math.max(0, Number(item?.fileSize || 0)),
+                durationSeconds: Math.max(0, Number(item?.durationSeconds || 0)),
+                streamType: item?.streamType === 'hls' ? 'hls' : 'direct',
+                streamAssets: Array.isArray(item?.streamAssets) ? item.streamAssets : [],
+                hlsKeyAsset:
+                  String(item?.hlsKeyAsset || '').trim() ||
+                  String(existingItem?.hlsKeyAsset || '').trim(),
+              };
+            })
             .filter((item) => item.videoUrl || item.fileUrl)
         : [];
 
@@ -2034,8 +2163,17 @@ export class CoursesService implements OnModuleInit {
               userAvatar: selfRecord.userAvatar,
               status: selfRecord.status,
               progressPercent: selfRecord.progressPercent || 0,
+              watchCount: selfRecord.watchCount || 0,
+              lastPositionSeconds: selfRecord.lastPositionSeconds || 0,
+              maxPositionSeconds: selfRecord.maxPositionSeconds || 0,
+              lessonDurationSeconds:
+                selfRecord.lessonDurationSeconds ||
+                lesson.durationSeconds ||
+                0,
               source: selfRecord.source || 'auto',
               markedAt: selfRecord.markedAt,
+              firstWatchedAt: selfRecord.firstWatchedAt || null,
+              lastWatchedAt: selfRecord.lastWatchedAt || null,
             }
           : null,
       };
@@ -2059,8 +2197,15 @@ export class CoursesService implements OnModuleInit {
         userAvatar: member.avatar,
         status: record?.status || 'absent',
         progressPercent: record?.progressPercent || 0,
+        watchCount: record?.watchCount || 0,
+        lastPositionSeconds: record?.lastPositionSeconds || 0,
+        maxPositionSeconds: record?.maxPositionSeconds || 0,
+        lessonDurationSeconds:
+          record?.lessonDurationSeconds || lesson.durationSeconds || 0,
         source: record?.source || 'manual',
         markedAt: record?.markedAt || null,
+        firstWatchedAt: record?.firstWatchedAt || null,
+        lastWatchedAt: record?.lastWatchedAt || null,
       };
     });
 
@@ -2081,7 +2226,12 @@ export class CoursesService implements OnModuleInit {
     courseId: string,
     lessonId: string,
     user: any,
-    dto: { progressPercent?: number },
+    dto: {
+      progressPercent?: number;
+      lastPositionSeconds?: number;
+      lessonDurationSeconds?: number;
+      watchIncrement?: number;
+    },
   ) {
     const course = await this.findById(courseId);
     const lessonIndex = course.lessons.findIndex(
@@ -2095,42 +2245,117 @@ export class CoursesService implements OnModuleInit {
     }
 
     const lesson = course.lessons[lessonIndex] as any;
-    const progressPercent = Math.max(0, Number(dto.progressPercent || 0));
+    const progressDelta = Math.max(0, Number(dto.progressPercent || 0));
+    const lessonDurationSeconds = Math.max(
+      Number(lesson?.durationSeconds || 0),
+      Number(dto.lessonDurationSeconds || 0),
+    );
+    const hasPositionUpdate = dto.lastPositionSeconds !== undefined;
+    const nextLastPositionSeconds = hasPositionUpdate
+      ? this.sanitizePlaybackSecond(dto.lastPositionSeconds, lessonDurationSeconds)
+      : null;
+    const watchIncrement = Math.max(
+      0,
+      Math.min(1, Number(dto.watchIncrement || 0)),
+    );
     const existingRecord = this.getAttendanceRecord(lesson, user._id.toString());
+    const now = new Date();
 
     if (existingRecord) {
-      const nextProgressPercent =
-        Number(existingRecord.progressPercent || 0) + progressPercent;
-      const nextStatus =
-        existingRecord.status === 'present' || nextProgressPercent >= 70
-          ? 'present'
-          : 'late';
+      const nextProgressPercent = Math.min(
+        100,
+        Math.max(Number(existingRecord.progressPercent || 0), progressDelta),
+      );
 
-      existingRecord.status = nextStatus;
+      existingRecord.status = this.resolveAttendanceStatus(
+        existingRecord.status,
+        nextProgressPercent,
+      );
       existingRecord.progressPercent = Number(nextProgressPercent.toFixed(2));
+      existingRecord.watchCount = Math.max(
+        0,
+        Number(existingRecord.watchCount || 0) + watchIncrement,
+      );
+      existingRecord.lessonDurationSeconds = Math.max(
+        Number(existingRecord.lessonDurationSeconds || 0),
+        lessonDurationSeconds,
+      );
+      if (hasPositionUpdate && nextLastPositionSeconds !== null) {
+        existingRecord.lastPositionSeconds = nextLastPositionSeconds;
+        existingRecord.maxPositionSeconds = Math.max(
+          Number(existingRecord.maxPositionSeconds || 0),
+          nextLastPositionSeconds,
+        );
+      }
+      if (
+        !existingRecord.firstWatchedAt &&
+        (watchIncrement > 0 ||
+          progressDelta > 0 ||
+          Number(nextLastPositionSeconds || 0) > 0)
+      ) {
+        existingRecord.firstWatchedAt = now;
+      }
+      if (
+        watchIncrement > 0 ||
+        progressDelta > 0 ||
+        Number(nextLastPositionSeconds || 0) > 0
+      ) {
+        existingRecord.lastWatchedAt = now;
+      }
       existingRecord.source = 'auto';
-      existingRecord.markedAt = new Date();
+      existingRecord.markedAt = now;
     } else {
-      const nextStatus = progressPercent >= 70 ? 'present' : 'late';
+      const nextProgressPercent = Math.min(100, progressDelta);
+      const inferredWatchCount =
+        watchIncrement > 0 ||
+        nextProgressPercent > 0 ||
+        Number(nextLastPositionSeconds || 0) > 0
+          ? Math.max(1, watchIncrement)
+          : 0;
       lesson.attendance.push({
         userId: new Types.ObjectId(user._id),
         userName: user.nickname || user.username,
         userAvatar:
           user.avatar ||
           (user.nickname || user.username || '').substring(0, 2).toUpperCase(),
-        status: nextStatus,
-        progressPercent,
+        status: this.resolveAttendanceStatus('absent', nextProgressPercent),
+        progressPercent: Number(nextProgressPercent.toFixed(2)),
+        watchCount: inferredWatchCount,
+        lastPositionSeconds: Number(nextLastPositionSeconds || 0),
+        maxPositionSeconds: Number(nextLastPositionSeconds || 0),
+        lessonDurationSeconds,
         source: 'auto',
-        markedAt: new Date(),
+        markedAt: now,
+        firstWatchedAt:
+          inferredWatchCount > 0 || nextProgressPercent > 0 ? now : null,
+        lastWatchedAt:
+          inferredWatchCount > 0 ||
+          nextProgressPercent > 0 ||
+          Number(nextLastPositionSeconds || 0) > 0
+            ? now
+            : null,
       } as any);
     }
 
     await course.save();
     await this.syncCourseMirrorCollections(course.toObject());
+    this.coursesGateway.notifyCourse(courseId, 'lesson_attendance_updated', {
+      courseId,
+      lessonId: lesson._id.toString(),
+      userId: user._id.toString(),
+    });
     const record = this.getAttendanceRecord(lesson, user._id.toString());
     return {
-      status: record?.status || (progressPercent >= 70 ? 'present' : 'late'),
-      progressPercent: record?.progressPercent || progressPercent,
+      status:
+        record?.status ||
+        this.resolveAttendanceStatus('absent', Math.min(100, progressDelta)),
+      progressPercent: record?.progressPercent || progressDelta,
+      watchCount: record?.watchCount || 0,
+      lastPositionSeconds: record?.lastPositionSeconds || 0,
+      maxPositionSeconds: record?.maxPositionSeconds || 0,
+      lessonDurationSeconds: record?.lessonDurationSeconds || lessonDurationSeconds,
+      firstWatchedAt: record?.firstWatchedAt || null,
+      lastWatchedAt: record?.lastWatchedAt || null,
     };
   }
 
@@ -2175,13 +2400,24 @@ export class CoursesService implements OnModuleInit {
         userAvatar: member.avatar,
         status: normalizedStatus,
         progressPercent: 0,
+        watchCount: 0,
+        lastPositionSeconds: 0,
+        maxPositionSeconds: 0,
+        lessonDurationSeconds: Number(lesson?.durationSeconds || 0),
         source: 'manual',
         markedAt: new Date(),
+        firstWatchedAt: null,
+        lastWatchedAt: null,
       } as any);
     }
 
     await course.save();
     await this.syncCourseMirrorCollections(course.toObject());
+    this.coursesGateway.notifyCourse(courseId, 'lesson_attendance_updated', {
+      courseId,
+      lessonId: lesson._id.toString(),
+      userId: targetUserId,
+    });
     return this.getLessonAttendance(courseId, lessonId, adminId);
   }
 
@@ -2435,6 +2671,11 @@ export class CoursesService implements OnModuleInit {
           (item: any) => item?._id?.toString?.() === dto.materialId,
         ) || null
       : null;
+    if (!existingMaterial && materials.length >= 3) {
+      throw new ForbiddenException(
+        "Bitta darsga maksimal 3 ta PDF material yuklash mumkin",
+      );
+    }
     const material =
       existingMaterial ||
       ({
@@ -2619,7 +2860,7 @@ export class CoursesService implements OnModuleInit {
     nextLinkedTest.shareShortCode = resolved.shareShortCode;
     nextLinkedTest.minimumScore = Math.max(
       0,
-      Math.min(100, Number(dto.minimumScore ?? existing?.minimumScore ?? 60)),
+      Math.min(100, Number(dto.minimumScore ?? existing?.minimumScore ?? 0)),
     );
     nextLinkedTest.timeLimit = resolved.shareShortCode
       ? Math.max(0, Number(resolved.timeLimit || 0))
@@ -2628,9 +2869,7 @@ export class CoursesService implements OnModuleInit {
       ? resolved.showResults !== false
       : existing?.showResults !== false;
     nextLinkedTest.requiredToUnlock =
-      typeof dto.requiredToUnlock === 'boolean'
-        ? dto.requiredToUnlock
-        : existing?.requiredToUnlock !== false;
+      true;
     const existingResourceType =
       existing?.resourceType === 'sentenceBuilder' ? 'sentenceBuilder' : 'test';
     const existingResourceId = existing?.resourceId || existing?.testId || '';

@@ -18,6 +18,8 @@ import { LoginDto } from './dto/login.dto';
 import { EmailService } from '../common/services/email.service';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SessionService } from './session.service';
+import type { Request as ExpressRequest } from 'express';
 
 @Injectable()
 export class AuthService {
@@ -26,6 +28,7 @@ export class AuthService {
     private jwtService: JwtService,
     private emailService: EmailService,
     private configService: ConfigService,
+    private sessionService: SessionService,
   ) {}
 
   private isAllowedAuthEmail(email: string) {
@@ -103,7 +106,7 @@ export class AuthService {
     };
   }
 
-  async login(loginDto: LoginDto) {
+  async login(loginDto: LoginDto, request?: ExpressRequest) {
     const normalizedEmail = loginDto.email.trim().toLowerCase();
 
     // Find user by email
@@ -136,8 +139,11 @@ export class AuthService {
       throw new UnauthorizedException("Email yoki parol noto'g'ri");
     }
 
-    // Generate JWT
-    const token = this.generateToken(user._id.toString(), user.email);
+    // Create session and generate JWT with tokenId
+    const tokenId = request
+      ? await this.sessionService.createSession(user._id.toString(), request)
+      : uuidv4();
+    const token = this.generateToken(user._id.toString(), user.email, tokenId);
 
     return {
       access_token: token,
@@ -145,7 +151,7 @@ export class AuthService {
     };
   }
 
-  async loginWithGoogleCode(code: string, redirectUri: string) {
+  async loginWithGoogleCode(code: string, redirectUri: string, request?: ExpressRequest) {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID') || '';
     const clientSecret =
       this.configService.get<string>('GOOGLE_CLIENT_SECRET') || '';
@@ -272,14 +278,17 @@ export class AuthService {
       }
     }
 
-    const token = this.generateToken(user._id.toString(), user.email);
+    const tokenId = request
+      ? await this.sessionService.createSession(user._id.toString(), request)
+      : uuidv4();
+    const token = this.generateToken(user._id.toString(), user.email, tokenId);
     return {
       access_token: token,
       user: this.sanitizeUser(user),
     };
   }
 
-  async verifyEmail(token: string) {
+  async verifyEmail(token: string, request?: ExpressRequest) {
     const user = await this.usersService.findByVerificationToken(token);
     if (!user) {
       throw new NotFoundException(
@@ -300,7 +309,10 @@ export class AuthService {
     await (user as any).save();
 
     // Generate JWT for auto-login
-    const jwt = this.generateToken(user._id.toString(), user.email);
+    const tokenId = request
+      ? await this.sessionService.createSession(user._id.toString(), request)
+      : uuidv4();
+    const jwt = this.generateToken(user._id.toString(), user.email, tokenId);
 
     return {
       access_token: jwt,
@@ -374,8 +386,11 @@ export class AuthService {
     };
   }
 
-  private generateToken(userId: string, email: string): string {
-    const payload = { sub: userId, email };
+  private generateToken(userId: string, email: string, tokenId?: string): string {
+    const payload: Record<string, string> = { sub: userId, email };
+    if (tokenId) {
+      payload.tokenId = tokenId;
+    }
     return this.jwtService.sign(payload);
   }
 

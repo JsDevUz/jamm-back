@@ -99,11 +99,29 @@ export class AttendanceRecord {
   @Prop({ default: 0 })
   progressPercent: number;
 
+  @Prop({ default: 0 })
+  watchCount: number;
+
+  @Prop({ default: 0 })
+  lastPositionSeconds: number;
+
+  @Prop({ default: 0 })
+  maxPositionSeconds: number;
+
+  @Prop({ default: 0 })
+  lessonDurationSeconds: number;
+
   @Prop({ enum: ['auto', 'manual'], default: 'auto' })
   source: string;
 
   @Prop({ type: Date, default: () => new Date() })
   markedAt: Date;
+
+  @Prop({ type: Date, default: null })
+  firstWatchedAt: Date | null;
+
+  @Prop({ type: Date, default: null })
+  lastWatchedAt: Date | null;
 }
 export const AttendanceRecordSchema =
   SchemaFactory.createForClass(AttendanceRecord);
@@ -457,6 +475,12 @@ export class Course {
 
   @Prop({ default: 'IT' })
   category: string;
+
+  @Prop({ default: '' })
+  lessonLanguage: string;
+
+  @Prop({ enum: ['ongoing', 'recorded'], default: 'recorded' })
+  deliveryType: string;
 
   @Prop({
     required: true,

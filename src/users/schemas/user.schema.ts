@@ -101,8 +101,18 @@ export class User {
   @Prop({ default: false })
   appLockEnabled: boolean;
 
+  /**
+   * ECDH P-256 public key (SubtleCrypto spki, base64).
+   * Set by client when E2EE is enabled. Server never sees the private key.
+   */
+  @Prop({ type: String, default: null, select: true })
+  e2ePublicKey: string | null;
+
   @Prop({ default: false })
   isBlocked: boolean;
+
+  @Prop({ default: false })
+  isInstructor: boolean;
 
   @Prop({
     type: [

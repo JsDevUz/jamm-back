@@ -16,6 +16,7 @@ import {
   APP_UNLOCK_HEADER_NAME,
 } from '../auth-cookie.util';
 import { JwtService } from '@nestjs/jwt';
+import { SessionService } from '../session.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -23,6 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private configService: ConfigService,
     private usersService: UsersService,
     private jwtService: JwtService,
+    private sessionService: SessionService,
   ) {
     super({
       passReqToCallback: true,
@@ -74,7 +76,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
   }
 
-  async validate(request: any, payload: { sub: string; email: string }) {
+  async validate(request: any, payload: { sub: string; email: string; tokenId?: string }) {
     const user = await this.usersService.findById(payload.sub);
     if (!user) {
       throw new UnauthorizedException();
@@ -84,6 +86,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         "Hisobingiz bloklangan. Qo'llab-quvvatlash bilan bog'laning.",
         HttpStatus.LOCKED,
       );
+    }
+
+    // Validate session if tokenId is present in the JWT payload
+    if (payload.tokenId) {
+      const isValid = await this.sessionService.isSessionValid(payload.tokenId);
+      if (!isValid) {
+        throw new UnauthorizedException('Session bekor qilingan. Qayta kiring.');
+      }
+      // Update lastUsedAt in the background (no await to avoid latency)
+      void this.sessionService.touchSession(payload.tokenId);
     }
 
     if (user.appLockEnabled) {

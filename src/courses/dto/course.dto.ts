@@ -16,6 +16,10 @@ import { APP_TEXT_LIMITS } from '../../common/limits/app-limits';
 class LessonMediaItemDto {
   @IsOptional()
   @IsString()
+  mediaId?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(APP_TEXT_LIMITS.lessonTitleChars)
   title?: string;
 
@@ -74,6 +78,15 @@ export class CreateCourseDto {
   @IsString()
   @MaxLength(APP_TEXT_LIMITS.courseCategoryChars)
   category?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  lessonLanguage?: string;
+
+  @IsOptional()
+  @IsEnum(['ongoing', 'recorded'])
+  deliveryType?: 'ongoing' | 'recorded';
 
   @IsOptional()
   @IsNumber()

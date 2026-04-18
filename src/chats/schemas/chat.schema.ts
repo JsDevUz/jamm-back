@@ -25,6 +25,15 @@ export class Chat {
   @Prop({ default: false })
   isE2EEnabled: boolean;
 
+  /**
+   * Per-member ECDH public keys for E2EE private chats.
+   * Key: userId (string), Value: base64 SPKI public key.
+   * Populated when both participants register their public keys.
+   * Server only stores public keys — private keys never leave the client.
+   */
+  @Prop({ type: Map, of: String, default: {} })
+  e2ePublicKeys: Map<string, string>;
+
   @Prop({ type: Number, unique: true, sparse: true })
   jammId?: number;
 

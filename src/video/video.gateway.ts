@@ -1027,6 +1027,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       pdfLibrary: room.whiteboard.pdfLibrary.map((item) =>
         this.serializeWhiteboardPdfLibraryItem(item),
       ),
+      updatedAt: room.whiteboard.updatedAt,
     };
 
     if (typeof target === 'string') {
