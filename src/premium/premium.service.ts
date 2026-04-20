@@ -196,7 +196,7 @@ export class PremiumService {
     // 1. Find user and check if already used a promo
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException('User not found');
-    if (user.hasUsedPromo) {
+    if (user.hasUsedPromo && user.premiumStatus !== 'expired') {
       throw new BadRequestException(
         'Siz allaqachon promo-koddan foydalangansiz',
       );

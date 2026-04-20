@@ -221,4 +221,8 @@ export class UpdateLessonDto {
   @IsOptional()
   @IsString()
   status?: string;
+
+  @IsOptional()
+  @IsString()
+  notionUrl?: string;
 }

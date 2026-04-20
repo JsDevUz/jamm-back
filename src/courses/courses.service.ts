@@ -277,6 +277,7 @@ export class CoursesService implements OnModuleInit {
           ? lesson.oralAssessments
           : [],
         content: lesson.content || {},
+        notionUrl: lesson.notionUrl || '',
         mediaItems: Array.isArray(lesson.mediaItems) ? lesson.mediaItems : [],
         materials: Array.isArray(lesson.materials) ? lesson.materials : [],
         linkedTests: Array.isArray(lesson.linkedTests) ? lesson.linkedTests : [],
@@ -462,6 +463,7 @@ export class CoursesService implements OnModuleInit {
           ? row.oralAssessments
           : [],
         content: row.content || {},
+        notionUrl: row.notionUrl || '',
         mediaItems: Array.isArray(row.mediaItems) ? row.mediaItems : [],
         materials: Array.isArray(row.materials) ? row.materials : [],
         linkedTests: Array.isArray(row.linkedTests) ? row.linkedTests : [],
@@ -612,6 +614,7 @@ export class CoursesService implements OnModuleInit {
         hlsKeyAsset: '',
         urlSlug: lesson.urlSlug,
         description: lesson.description,
+        notionUrl: lesson.notionUrl || '',
         status: lesson.status || 'published',
         publishedAt: lesson.publishedAt || null,
         views: lesson.views,
@@ -1739,6 +1742,7 @@ export class CoursesService implements OnModuleInit {
       streamType?: string;
       streamAssets?: string[];
       hlsKeyAsset?: string;
+      notionUrl?: string;
       mediaItems?: {
         mediaId?: string;
         title?: string;
@@ -1798,6 +1802,10 @@ export class CoursesService implements OnModuleInit {
         APP_TEXT_LIMITS.lessonDescriptionChars,
       );
       lesson.description = dto.description || '';
+    }
+
+    if (dto.notionUrl !== undefined) {
+      lesson.notionUrl = String(dto.notionUrl || '').trim();
     }
 
     if (dto.mediaItems !== undefined) {
@@ -1986,9 +1994,10 @@ export class CoursesService implements OnModuleInit {
     }
 
     const hasMedia = this.normalizeLessonMediaItems(lesson).length > 0;
-    if (!hasMedia) {
+    const hasNotionUrl = typeof lesson.notionUrl === 'string' && lesson.notionUrl.trim().length > 0;
+    if (!hasMedia && !hasNotionUrl) {
       throw new ForbiddenException(
-        "Darsni e'lon qilish uchun avval video yoki fayl biriktiring",
+        "Darsni e'lon qilish uchun avval video yoki Notion havola qo'shing",
       );
     }
 

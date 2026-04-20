@@ -52,6 +52,7 @@ import {
 import { UploadValidationService } from '../common/uploads/upload-validation.service';
 import { createSafeSingleFileMulterOptions } from '../common/uploads/multer-options';
 import { APP_LIMITS } from '../common/limits/app-limits';
+import { getAllowedOrigins } from '../common/config/cors.config';
 
 const execFileAsync = promisify(execFile);
 
@@ -1864,5 +1865,111 @@ export class CoursesController {
       req.user,
       body.text,
     );
+  }
+
+  /* ---- NOTION PROXY ---- */
+
+  @UseGuards(JwtAuthGuard)
+  @Get('proxy/notion')
+  async notionProxy(
+    @Query('url') rawUrl: string,
+    @Headers('origin') requestOrigin: string | undefined,
+    @Res() res: Response,
+  ) {
+    if (!rawUrl) throw new BadRequestException('url param required');
+
+    const url = String(rawUrl).trim();
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new BadRequestException('Notion URL noto‘g‘ri');
+    }
+
+    const hostname = parsedUrl.hostname.toLowerCase();
+    if (
+      !hostname.endsWith('notion.so') &&
+      !hostname.endsWith('notion.site')
+    ) {
+      throw new BadRequestException('Faqat Notion havolalari ruxsat etilgan');
+    }
+
+    const decodedPath = decodeURIComponent(parsedUrl.pathname || '');
+    const compactIdMatch =
+      decodedPath.match(/([a-f0-9]{32})(?![a-f0-9])/i) ||
+      url.match(/([a-f0-9]{32})(?![a-f0-9])/i);
+    const hyphenatedIdMatch =
+      decodedPath.match(
+        /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i,
+      ) ||
+      url.match(
+        /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i,
+      );
+
+    const rawId = String(
+      compactIdMatch?.[1] ||
+        hyphenatedIdMatch?.[1]?.replace(/-/g, '') ||
+        '',
+    ).trim();
+
+    if (!/^[a-f0-9]{32}$/i.test(rawId)) {
+      throw new BadRequestException('Notion page ID topilmadi');
+    }
+
+    const pageId = [
+      rawId.slice(0, 8),
+      rawId.slice(8, 12),
+      rawId.slice(12, 16),
+      rawId.slice(16, 20),
+      rawId.slice(20),
+    ].join('-');
+
+    try {
+      const response = await fetch('https://www.notion.so/api/v3/loadPageChunk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; JammBot/1.0)',
+          Origin: 'https://www.notion.so',
+          Referer: url,
+        },
+        body: JSON.stringify({
+          pageId,
+          limit: 100,
+          cursor: { stack: [] },
+          chunkNumber: 0,
+          verticalColumns: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error('[Courses] Notion proxy error:', {
+          status: response.status,
+          pageId,
+          url,
+          body: errorText.slice(0, 500),
+        });
+        throw new Error(`Notion API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const allowedOrigins = getAllowedOrigins();
+      const normalizedRequestOrigin = String(requestOrigin || '').trim().replace(/\/+$/, '');
+      if (normalizedRequestOrigin && allowedOrigins.includes(normalizedRequestOrigin)) {
+        res.setHeader('Access-Control-Allow-Origin', normalizedRequestOrigin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Vary', 'Origin');
+      }
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.json(data);
+    } catch (err) {
+      console.error('[Courses] Notion page load failed:', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new BadRequestException('Notion sahifani yuklab bo‘lmadi');
+    }
   }
 }

@@ -77,6 +77,9 @@ export class CourseLessonRecord {
   @Prop({ type: Object, default: {} })
   content: Record<string, any>;
 
+  @Prop({ default: '' })
+  notionUrl: string;
+
   @Prop({ type: [Object], default: [] })
   mediaItems: Record<string, any>[];
 
