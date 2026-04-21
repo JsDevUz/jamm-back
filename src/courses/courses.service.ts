@@ -1640,6 +1640,15 @@ export class CoursesService implements OnModuleInit {
       throw new ForbiddenException("Siz bu kursni o'chira olmaysiz");
     }
 
+    // Delete course image from R2
+    if (course.image) {
+      await this.r2Service
+        .deleteFile(course.image)
+        .catch((error) =>
+          console.error(`Failed to delete course image ${course.image}:`, error),
+        );
+    }
+
     // Delete associated files in R2
     for (const lesson of course.lessons as any[]) {
       for (const item of this.normalizeLessonMediaItems(lesson)) {
@@ -2072,9 +2081,7 @@ export class CoursesService implements OnModuleInit {
       throw new ForbiddenException("Faqat kurs egasi dars o'chira oladi");
     }
 
-    const lessonObj = course.lessons.find(
-      (l: any) => l._id.toString() === lessonId,
-    ) as any;
+    const lessonObj = this.findLessonByIdentifier(course, lessonId);
     if (lessonObj) {
       for (const item of this.normalizeLessonMediaItems(lessonObj)) {
         await this.cleanupLessonMediaItemAssets(item);
@@ -2089,8 +2096,9 @@ export class CoursesService implements OnModuleInit {
       }
     }
 
+    const targetId = lessonObj?._id?.toString() || lessonId;
     course.lessons = course.lessons.filter(
-      (l: any) => l._id.toString() !== lessonId,
+      (l: any) => l._id.toString() !== targetId,
     ) as any;
     const savedCourse = await course.save();
     await this.syncCourseMirrorCollections(savedCourse.toObject());
