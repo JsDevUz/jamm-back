@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AppSettingsService } from '../app-settings/app-settings.service';
@@ -13,6 +17,7 @@ import { PromoCode, PromoCodeDocument } from '../premium/schemas/promo-code.sche
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { AdminListDto } from './dto/admin-list.dto';
 import { CreatePromoCodeDto } from './dto/create-promo-code.dto';
+import { UpdateUserInstructorDto } from './dto/update-user-instructor.dto';
 
 @Injectable()
 export class AdminService {
@@ -65,7 +70,7 @@ export class AdminService {
       this.userModel
         .find(query)
         .select(
-          'nickname username email avatar premiumStatus premiumExpiresAt isBlocked createdAt updatedAt jammId',
+          'nickname username email avatar premiumStatus premiumExpiresAt isBlocked isInstructor createdAt updatedAt jammId',
         )
         .sort(sort)
         .skip(skip)
@@ -218,5 +223,32 @@ export class AdminService {
       maxUses: dto.maxUses ?? null,
       isActive: dto.isActive,
     });
+  }
+
+  async updateUserInstructor(userId: string, dto: UpdateUserInstructorDto) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('Invalid user id');
+    }
+
+    const user = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $set: { isInstructor: dto.isInstructor } },
+        { new: true },
+      )
+      .select(
+        'nickname username email avatar premiumStatus premiumExpiresAt isBlocked isInstructor createdAt updatedAt jammId',
+      )
+      .lean();
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const [decoratedUser] = await this.appSettingsService.decorateUsersPayload([
+      user as any,
+    ]);
+
+    return decoratedUser;
   }
 }
