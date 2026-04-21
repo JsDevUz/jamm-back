@@ -85,6 +85,20 @@ export class CreateCourseDto {
   lessonLanguage?: string;
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @MaxLength(160, { each: true })
+  previewLearn?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @MaxLength(160, { each: true })
+  previewRequirements?: string[];
+
+  @IsOptional()
   @IsEnum(['ongoing', 'recorded'])
   deliveryType?: 'ongoing' | 'recorded';
 

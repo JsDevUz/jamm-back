@@ -88,6 +88,9 @@ export class CourseLessonRecord {
 
   @Prop({ type: [Object], default: [] })
   linkedTests: Record<string, any>[];
+
+  @Prop({ type: [Object], default: [] })
+  notes: Record<string, any>[];
 }
 
 export const CourseLessonRecordSchema =

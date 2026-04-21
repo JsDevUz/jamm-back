@@ -223,6 +223,8 @@ export class CoursesService implements OnModuleInit {
       accessType: course?.accessType || 'free_request',
       price: Number(course?.price || 0),
       rating: Number(course?.rating || 0),
+      ratingCount: Number(course?.ratingCount || 0),
+      reviews: Array.isArray(course?.reviews) ? course.reviews : [],
       createdBy: course?.createdBy,
     };
   }
@@ -281,6 +283,7 @@ export class CoursesService implements OnModuleInit {
         mediaItems: Array.isArray(lesson.mediaItems) ? lesson.mediaItems : [],
         materials: Array.isArray(lesson.materials) ? lesson.materials : [],
         linkedTests: Array.isArray(lesson.linkedTests) ? lesson.linkedTests : [],
+        notes: Array.isArray(lesson.notes) ? lesson.notes : [],
       }),
     );
   }
@@ -467,6 +470,7 @@ export class CoursesService implements OnModuleInit {
         mediaItems: Array.isArray(row.mediaItems) ? row.mediaItems : [],
         materials: Array.isArray(row.materials) ? row.materials : [],
         linkedTests: Array.isArray(row.linkedTests) ? row.linkedTests : [],
+        notes: Array.isArray(row.notes) ? row.notes : [],
         homework: homeworkByLessonId.get(lessonKey) || [],
       };
     });
@@ -551,6 +555,10 @@ export class CoursesService implements OnModuleInit {
     const pendingMembers = memberItems.filter(
       (member: any) => member?.status === 'pending',
     );
+    const reviews = Array.isArray(course.reviews) ? course.reviews : [];
+    const selfReview = reviews.find(
+      (review: any) => review?.userId?.toString?.() === userId,
+    );
 
     if (!isAdmin) {
       course.lessons = (course.lessons || []).filter(
@@ -584,6 +592,27 @@ export class CoursesService implements OnModuleInit {
     course.membersCount = approvedMembers.length;
     course.pendingMembersCount = pendingMembers.length;
     course.totalMembersCount = memberItems.length;
+    course.rating = Number(course.rating || 0);
+    course.ratingCount = Number(course.ratingCount || reviews.length || 0);
+    course.selfReview = selfReview
+      ? {
+          reviewId: selfReview._id?.toString?.() || '',
+          rating: Number(selfReview.rating || 0),
+          text: selfReview.text || '',
+          createdAt: selfReview.createdAt || null,
+          updatedAt: selfReview.updatedAt || null,
+        }
+      : null;
+    course.reviews = reviews.map((review: any) => ({
+      reviewId: review._id?.toString?.() || '',
+      userId: review.userId,
+      userName: review.userName || '',
+      userAvatar: review.userAvatar || '',
+      rating: Number(review.rating || 0),
+      text: review.text || '',
+      createdAt: review.createdAt || null,
+      updatedAt: review.updatedAt || null,
+    }));
     course.lessonCount = (course.lessons || []).length;
     course.publishedLessonsCount = (course.lessons || []).filter(
       (lesson: any) => (lesson.status || 'published') !== 'draft',
@@ -596,6 +625,9 @@ export class CoursesService implements OnModuleInit {
       const commentsCount = Array.isArray(lesson.comments)
         ? lesson.comments.length
         : 0;
+      const selfNote = (lesson.notes || []).find(
+        (item: any) => item?.userId?.toString?.() === userId,
+      );
 
       return {
         _id: lesson._id,
@@ -644,6 +676,12 @@ export class CoursesService implements OnModuleInit {
             this.serializeHomeworkAssignment(assignment, userId, isAdmin, false),
           ),
         },
+        selfNote: selfNote
+          ? {
+              text: selfNote.text || '',
+              updatedAt: selfNote.updatedAt || null,
+            }
+          : null,
         attendanceSummary: {
           present: (lesson.attendance || []).filter(
             (item: any) => item.status === 'present',
@@ -1517,6 +1555,8 @@ export class CoursesService implements OnModuleInit {
       image?: string;
       category?: string;
       lessonLanguage?: string;
+      previewLearn?: string[];
+      previewRequirements?: string[];
       deliveryType?: 'ongoing' | 'recorded';
       price?: number;
       accessType?: string;
@@ -1538,6 +1578,12 @@ export class CoursesService implements OnModuleInit {
       APP_TEXT_LIMITS.courseCategoryChars,
     );
     assertMaxChars('Dars tili', dto.lessonLanguage, 40);
+    for (const item of dto.previewLearn || []) {
+      assertMaxChars("Kursda o'rganiladigan bo'lim", item, 160);
+    }
+    for (const item of dto.previewRequirements || []) {
+      assertMaxChars('Kurs talabi', item, 160);
+    }
 
     const limit = getTierLimit(APP_LIMITS.coursesCreated, user.premiumStatus);
 
@@ -1567,6 +1613,14 @@ export class CoursesService implements OnModuleInit {
     const createdCourse = await this.courseModel.create({
       ...dto,
       lessonLanguage: String(dto.lessonLanguage || '').trim(),
+      previewLearn: (dto.previewLearn || [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 8),
+      previewRequirements: (dto.previewRequirements || [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 8),
       deliveryType: dto.deliveryType === 'ongoing' ? 'ongoing' : 'recorded',
       urlSlug: finalSlug,
       gradient,
@@ -2095,6 +2149,145 @@ export class CoursesService implements OnModuleInit {
       liked: !alreadyLiked,
       likes: lesson.likes.length,
     };
+  }
+
+  async upsertLessonNote(
+    courseId: string,
+    lessonId: string,
+    user: any,
+    dto: { text?: string },
+  ) {
+    const userId = user?._id?.toString?.() || user?.id?.toString?.() || '';
+    if (!userId) throw new ForbiddenException('Foydalanuvchi topilmadi');
+
+    const course = await this.findById(courseId);
+    const lessonIndex = course.lessons.findIndex(
+      (lesson: any) =>
+        lesson._id.toString() === lessonId || lesson.urlSlug === lessonId,
+    );
+    if (lessonIndex === -1) throw new NotFoundException('Dars topilmadi');
+    if (!this.canAccessLesson(course, userId, lessonIndex)) {
+      throw new ForbiddenException("Bu darsga eslatma yozish huquqi yo'q");
+    }
+
+    const lesson = course.lessons[lessonIndex] as any;
+    const text = String(dto?.text || '').slice(0, APP_TEXT_LIMITS.homeworkAnswerChars);
+    const notes = Array.isArray(lesson.notes) ? lesson.notes : [];
+    const userObjectId = new Types.ObjectId(userId);
+    const existingIndex = notes.findIndex(
+      (item: any) => item?.userId?.toString?.() === userId,
+    );
+    const updatedAt = new Date();
+
+    if (existingIndex >= 0) {
+      notes[existingIndex] = {
+        ...notes[existingIndex],
+        text,
+        updatedAt,
+      };
+    } else {
+      notes.push({
+        userId: userObjectId,
+        text,
+        updatedAt,
+      });
+    }
+
+    lesson.notes = notes;
+    await this.courseLessonRecordModel
+      .updateOne(
+        { courseId: course._id, lessonId: lesson._id },
+        { $set: { notes } },
+      )
+      .exec();
+
+    return { text, updatedAt };
+  }
+
+  async upsertCourseReview(
+    courseId: string,
+    user: any,
+    dto: { rating?: number; text?: string },
+  ) {
+    const userId = user?._id?.toString?.() || user?.id?.toString?.() || '';
+    if (!userId) throw new ForbiddenException('Foydalanuvchi topilmadi');
+
+    const course = await this.findById(courseId);
+    const ownerId = course.createdBy?.toString?.() || '';
+    if (ownerId === userId) {
+      throw new ForbiddenException("O'z kursingizga rating qoldirib bo'lmaydi");
+    }
+
+    const isApprovedMember = (course.members || []).some(
+      (member: any) =>
+        member.userId?.toString?.() === userId && member.status === 'approved',
+    );
+    if (!isApprovedMember) {
+      throw new ForbiddenException("Rating qoldirish uchun kursga a'zo bo'ling");
+    }
+
+    const rating = Math.max(1, Math.min(5, Math.round(Number(dto?.rating || 0))));
+    const text = String(dto?.text || '').trim().slice(0, 800);
+    const reviews = Array.isArray((course as any).reviews)
+      ? [...(course as any).reviews]
+      : [];
+    const userObjectId = new Types.ObjectId(userId);
+    const now = new Date();
+    const existingIndex = reviews.findIndex(
+      (review: any) => review?.userId?.toString?.() === userId,
+    );
+    const userName =
+      user?.nickname || user?.username || user?.name || user?.email || 'User';
+    const userAvatar = user?.avatar || '';
+
+    if (existingIndex >= 0) {
+      reviews[existingIndex] = {
+        ...reviews[existingIndex],
+        rating,
+        text,
+        userName,
+        userAvatar,
+        updatedAt: now,
+      };
+    } else {
+      reviews.push({
+        userId: userObjectId,
+        userName,
+        userAvatar,
+        rating,
+        text,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const ratingCount = reviews.length;
+    const average =
+      ratingCount > 0
+        ? Number(
+            (
+              reviews.reduce(
+                (sum: number, review: any) => sum + Number(review?.rating || 0),
+                0,
+              ) / ratingCount
+            ).toFixed(1),
+          )
+        : 0;
+
+    await this.courseModel
+      .updateOne(
+        { _id: course._id },
+        {
+          $set: {
+            reviews,
+            rating: average,
+            ratingCount,
+          },
+        },
+      )
+      .exec();
+
+    return this.getCourseForUser(courseId, userId);
   }
 
   async getLikedLessons(userId: string) {
@@ -2652,6 +2845,50 @@ export class CoursesService implements OnModuleInit {
     };
   }
 
+  async getCourseMaterialLibrary(courseId: string, userId: string) {
+    const course = await this.findById(courseId);
+    if (course.createdBy.toString() !== userId) {
+      throw new ForbiddenException(
+        "Faqat kurs egasi materiallar kutubxonasini ko'ra oladi",
+      );
+    }
+
+    const seen = new Set<string>();
+    const items: Array<{
+      materialId: string;
+      title: string;
+      fileUrl: string;
+      fileName: string;
+      fileSize: number;
+      lessonId: string;
+      lessonTitle: string;
+    }> = [];
+
+    for (const lesson of Array.isArray(course.lessons) ? course.lessons : []) {
+      const lessonTitle = String(lesson?.title || '');
+      const normalizedMaterials = this.normalizeLessonMaterials(lesson);
+      for (const item of normalizedMaterials) {
+        const fileUrl = String(item?.fileUrl || '').trim();
+        const fileName = String(item?.fileName || '').trim();
+        if (!fileUrl || !fileName.toLowerCase().endsWith('.pdf')) continue;
+        if (seen.has(fileUrl)) continue;
+        seen.add(fileUrl);
+        items.push({
+          materialId: item?._id?.toString?.() || '',
+          title: String(item?.title || fileName.replace(/\.pdf$/i, '')),
+          fileUrl,
+          fileName,
+          fileSize: Math.max(0, Number(item?.fileSize || 0)),
+          lessonId:
+            lesson?._id?.toString?.() || String(lesson?.urlSlug || ''),
+          lessonTitle,
+        });
+      }
+    }
+
+    return { items };
+  }
+
   async upsertLessonMaterial(
     courseId: string,
     lessonId: string,
@@ -2838,11 +3075,7 @@ export class CoursesService implements OnModuleInit {
       ) || null;
 
     if (!existing) {
-      const premiumStatus = await this.getUserPremiumStatus(userId);
-      const linkedTestLimit = getTierLimit(
-        APP_LIMITS.lessonTestsPerLesson,
-        premiumStatus,
-      );
+      const linkedTestLimit = 3;
       if (linkedTests.length >= linkedTestLimit) {
         throw new ForbiddenException(
           `Bu tarifda bitta dars uchun maksimal ${linkedTestLimit} ta test biriktirish mumkin`,

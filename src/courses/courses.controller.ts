@@ -43,6 +43,8 @@ import {
   UpsertLessonHomeworkDto,
   UpsertLessonLinkedTestDto,
   UpsertLessonMaterialDto,
+  UpsertLessonNoteDto,
+  UpsertCourseReviewDto,
 } from './dto/course-interactions.dto';
 import {
   CreateCourseDto,
@@ -866,6 +868,16 @@ export class CoursesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch(':id/review')
+  upsertCourseReview(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: UpsertCourseReviewDto,
+  ) {
+    return this.coursesService.upsertCourseReview(id, req.user, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post()
   create(@Request() req, @Body() body: CreateCourseDto) {
     return this.coursesService.create(req.user._id.toString(), body);
@@ -974,6 +986,17 @@ export class CoursesController {
       lessonId,
       req.user._id.toString(),
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/lessons/:lessonId/note')
+  upsertLessonNote(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body() body: UpsertLessonNoteDto,
+  ) {
+    return this.coursesService.upsertLessonNote(id, lessonId, req.user, body);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -1107,6 +1130,15 @@ export class CoursesController {
     return this.coursesService.getLessonMaterials(
       id,
       lessonId,
+      req.user._id.toString(),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/materials/library')
+  getCourseMaterialLibrary(@Request() req, @Param('id') id: string) {
+    return this.coursesService.getCourseMaterialLibrary(
+      id,
       req.user._id.toString(),
     );
   }

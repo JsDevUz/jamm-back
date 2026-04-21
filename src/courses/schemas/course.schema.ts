@@ -359,6 +359,19 @@ export const LessonMaterialSchema =
   SchemaFactory.createForClass(LessonMaterial);
 
 @Schema({ _id: true, timestamps: false })
+export class LessonNote {
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  userId: Types.ObjectId;
+
+  @Prop({ default: '' })
+  text: string;
+
+  @Prop({ type: Date, default: () => new Date() })
+  updatedAt: Date;
+}
+export const LessonNoteSchema = SchemaFactory.createForClass(LessonNote);
+
+@Schema({ _id: true, timestamps: false })
 export class Lesson {
   _id: Types.ObjectId;
 
@@ -433,6 +446,9 @@ export class Lesson {
 
   @Prop({ type: [LessonMaterialSchema], default: [] })
   materials: LessonMaterial[];
+
+  @Prop({ type: [LessonNoteSchema], default: [] })
+  notes: LessonNote[];
 }
 export const LessonSchema = SchemaFactory.createForClass(Lesson);
 
@@ -454,6 +470,31 @@ export class CourseMember {
   joinedAt: Date;
 }
 export const CourseMemberSchema = SchemaFactory.createForClass(CourseMember);
+
+@Schema({ _id: true, timestamps: false })
+export class CourseReview {
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  userId: Types.ObjectId;
+
+  @Prop({ required: true })
+  userName: string;
+
+  @Prop({ default: '' })
+  userAvatar: string;
+
+  @Prop({ min: 1, max: 5, required: true })
+  rating: number;
+
+  @Prop({ default: '' })
+  text: string;
+
+  @Prop({ type: Date, default: () => new Date() })
+  createdAt: Date;
+
+  @Prop({ type: Date, default: () => new Date() })
+  updatedAt: Date;
+}
+export const CourseReviewSchema = SchemaFactory.createForClass(CourseReview);
 
 /* ---- Main Course schema ---- */
 
@@ -479,6 +520,12 @@ export class Course {
   @Prop({ default: '' })
   lessonLanguage: string;
 
+  @Prop({ type: [String], default: [] })
+  previewLearn: string[];
+
+  @Prop({ type: [String], default: [] })
+  previewRequirements: string[];
+
   @Prop({ enum: ['ongoing', 'recorded'], default: 'recorded' })
   deliveryType: string;
 
@@ -500,6 +547,12 @@ export class Course {
 
   @Prop({ default: 0 })
   rating: number;
+
+  @Prop({ default: 0 })
+  ratingCount: number;
+
+  @Prop({ type: [CourseReviewSchema], default: [] })
+  reviews: CourseReview[];
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;

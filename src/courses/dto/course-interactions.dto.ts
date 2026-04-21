@@ -197,3 +197,21 @@ export class LessonCommentDto {
   @MaxLength(APP_TEXT_LIMITS.messageChars)
   text: string;
 }
+
+export class UpsertLessonNoteDto {
+  @IsString()
+  @MaxLength(APP_TEXT_LIMITS.homeworkAnswerChars)
+  text: string;
+}
+
+export class UpsertCourseReviewDto {
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(800)
+  text?: string;
+}
