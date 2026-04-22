@@ -75,13 +75,35 @@ export class PresenceGateway
     return !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() > Date.now();
   }
 
+  private getConnectedSockets() {
+    const directSockets = (this.server as any)?.sockets;
+    if (directSockets && typeof directSockets.forEach === 'function') {
+      return directSockets;
+    }
+
+    const nestedSockets = directSockets?.sockets;
+    if (nestedSockets && typeof nestedSockets.forEach === 'function') {
+      return nestedSockets;
+    }
+
+    return null;
+  }
+
   private emitOfflineEvent(event: PresenceStatusEvent) {
     const payloadWithLastSeen = {
       userId: event.userId,
       lastSeen: new Date(event.timestamp).toISOString(),
     };
 
-    this.server.sockets.sockets.forEach((socket) => {
+    const sockets = this.getConnectedSockets();
+    if (!sockets) {
+      this.logger.warn(
+        `Presence sockets collection unavailable while emitting offline event for ${event.userId}`,
+      );
+      return;
+    }
+
+    sockets.forEach((socket: Socket) => {
       socket.emit(
         'user_offline',
         socket.data?.canViewLastSeen
