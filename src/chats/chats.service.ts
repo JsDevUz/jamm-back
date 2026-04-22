@@ -523,6 +523,7 @@ export class ChatsService implements OnModuleInit {
     userId: string,
     dto: {
       isGroup: boolean;
+      isSavedMessages?: boolean;
       name?: string;
       description?: string;
       avatar?: string;
@@ -594,33 +595,85 @@ export class ChatsService implements OnModuleInit {
 
   async ensureSavedMessagesChat(userId: string): Promise<ChatDocument> {
     const selfObjectId = new Types.ObjectId(userId);
+    const savedMessagesName = 'Saved Messages';
 
     const existing = await this.chatModel
+      .findOne({
+        isGroup: false,
+        isSavedMessages: true,
+        members: selfObjectId,
+      })
+      .exec();
+
+    if (existing) {
+      const needsLegacyRepair =
+        existing.members.length !== 2 ||
+        existing.members.some((memberId) => !memberId.equals(selfObjectId));
+
+      if (!needsLegacyRepair) {
+        return existing;
+      }
+
+      existing.members = [selfObjectId, selfObjectId];
+      existing.isSavedMessages = true;
+      if (!existing.name) {
+        existing.name = savedMessagesName;
+      }
+      return existing.save();
+    }
+
+    const legacyExactMatch = await this.chatModel
       .findOne({
         isGroup: false,
         members: [selfObjectId, selfObjectId],
       })
       .exec();
 
-    if (existing) {
-      return existing;
+    if (legacyExactMatch) {
+      legacyExactMatch.isSavedMessages = true;
+      if (!legacyExactMatch.name) {
+        legacyExactMatch.name = savedMessagesName;
+      }
+      return legacyExactMatch.save();
     }
 
-    const fallback = await this.chatModel
+    const legacySingleMemberMatch = await this.chatModel
       .findOne({
         isGroup: false,
-        members: { $size: 2, $all: [selfObjectId] },
+        members: { $size: 1, $all: [selfObjectId] },
       })
       .exec();
 
-    if (fallback) {
-      return fallback;
+    if (legacySingleMemberMatch) {
+      legacySingleMemberMatch.members = [selfObjectId, selfObjectId];
+      legacySingleMemberMatch.isSavedMessages = true;
+      if (!legacySingleMemberMatch.name) {
+        legacySingleMemberMatch.name = savedMessagesName;
+      }
+      return legacySingleMemberMatch.save();
     }
 
-    return this.createChat(userId, {
+    const createdChat = await this.createChat(userId, {
       isGroup: false,
+      isSavedMessages: true,
+      name: savedMessagesName,
       memberIds: [userId],
     });
+
+    if (!createdChat.isSavedMessages) {
+      createdChat.isSavedMessages = true;
+      if (!createdChat.name) {
+        createdChat.name = savedMessagesName;
+      }
+      return createdChat.save();
+    }
+
+    if (!createdChat.name) {
+      createdChat.name = savedMessagesName;
+      return createdChat.save();
+    }
+
+    return createdChat;
   }
 
   async getVideoCallCreatorIdByRoomId(roomId: string): Promise<string | null> {

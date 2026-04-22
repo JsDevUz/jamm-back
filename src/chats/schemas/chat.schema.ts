@@ -22,6 +22,9 @@ export class Chat {
   @Prop({ required: true, default: false })
   isGroup: boolean;
 
+  @Prop({ default: false, index: true })
+  isSavedMessages: boolean;
+
   @Prop({ default: false })
   isE2EEnabled: boolean;
 
