@@ -978,8 +978,24 @@ export class CoursesService implements OnModuleInit {
 
   private ensureLessonMaterials(lesson: any) {
     const normalized = this.normalizeLessonMaterials(lesson);
-    lesson.materials = normalized;
-    return normalized;
+    let changed = false;
+    const materials = normalized.map((item: any) => {
+      if (item?._id?.toString?.()) {
+        return item;
+      }
+
+      changed = true;
+      return {
+        ...(item || {}),
+        _id: new Types.ObjectId(),
+      };
+    });
+
+    lesson.materials = materials;
+    return {
+      materials,
+      changed,
+    };
   }
 
   private getLessonMediaPayload(item: any) {
@@ -2993,8 +3009,14 @@ export class CoursesService implements OnModuleInit {
     }
 
     const lesson = course.lessons[lessonIndex] as any;
+    const { materials, changed } = this.ensureLessonMaterials(lesson);
+    if (changed) {
+      await course.save();
+      await this.syncCourseMirrorCollections(course.toObject());
+    }
+
     return {
-      items: this.normalizeLessonMaterials(lesson).map((item: any) => ({
+      items: materials.map((item: any) => ({
         materialId: item?._id?.toString?.() || '',
         title: item?.title || '',
         fileUrl: item?.fileUrl || '',
@@ -3022,10 +3044,16 @@ export class CoursesService implements OnModuleInit {
       lessonId: string;
       lessonTitle: string;
     }> = [];
+    let courseChanged = false;
 
     for (const lesson of Array.isArray(course.lessons) ? course.lessons : []) {
       const lessonTitle = String(lesson?.title || '');
-      const normalizedMaterials = this.normalizeLessonMaterials(lesson);
+      const { materials: normalizedMaterials, changed } =
+        this.ensureLessonMaterials(lesson);
+      if (changed) {
+        courseChanged = true;
+      }
+
       for (const item of normalizedMaterials) {
         const fileUrl = String(item?.fileUrl || '').trim();
         const fileName = String(item?.fileName || '').trim();
@@ -3043,6 +3071,11 @@ export class CoursesService implements OnModuleInit {
           lessonTitle,
         });
       }
+    }
+
+    if (courseChanged) {
+      await course.save();
+      await this.syncCourseMirrorCollections(course.toObject());
     }
 
     return { items };
@@ -3070,7 +3103,7 @@ export class CoursesService implements OnModuleInit {
     const lesson = this.findLessonByIdentifier(course, lessonId);
     if (!lesson) throw new NotFoundException('Dars topilmadi');
 
-    const materials = this.ensureLessonMaterials(lesson);
+    const { materials } = this.ensureLessonMaterials(lesson);
     const existingMaterial = dto.materialId
       ? materials.find(
           (item: any) => item?._id?.toString?.() === dto.materialId,
@@ -3157,7 +3190,7 @@ export class CoursesService implements OnModuleInit {
     const lesson = this.findLessonByIdentifier(course, lessonId);
     if (!lesson) throw new NotFoundException('Dars topilmadi');
 
-    const materials = this.ensureLessonMaterials(lesson);
+    const { materials } = this.ensureLessonMaterials(lesson);
     const material = materials.find(
       (item: any) => item?._id?.toString?.() === materialId,
     );
