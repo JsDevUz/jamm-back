@@ -31,6 +31,7 @@ export const APP_LIMITS = {
   coursesCreated: { ordinary: 2, premium: 6 },
   lessonsPerCourse: { ordinary: 10, premium: 30 },
   lessonVideosPerLesson: { ordinary: 3, premium: 3 },
+  lessonTimedNotesPerLesson: { ordinary: 10, premium: 30 },
   testsCreated: { ordinary: 30, premium: 100 },
   testShareLinksPerTest: { ordinary: 2, premium: 4 },
   testsPerDeck: { ordinary: 30, premium: 50 },

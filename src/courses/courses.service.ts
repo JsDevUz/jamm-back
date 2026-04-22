@@ -109,6 +109,29 @@ export class CoursesService implements OnModuleInit {
     return isPrefixedShortSlug(value, '+');
   }
 
+  private countTimedLessonNotes(text?: string | null) {
+    return String(text || '')
+      .split(/\r?\n/)
+      .filter((line) =>
+        /^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?\]|\d{1,2}:\d{2}(?::\d{2})?)\s*(?:[-:|]\s*)?/u.test(
+          line,
+        ),
+      ).length;
+  }
+
+  private countUntimedLessonNoteLines(text?: string | null) {
+    return String(text || '')
+      .split(/\r?\n/)
+      .map((line) => String(line || '').trim())
+      .filter(Boolean)
+      .filter(
+        (line) =>
+          !/^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?\]|\d{1,2}:\d{2}(?::\d{2})?)\s*(?:[-:|]\s*)?/u.test(
+            line,
+          ),
+      ).length;
+  }
+
   private async generateUniqueCourseSlug(preferredSlug?: string) {
     const baseSlug = sanitizePrefixedSlug(preferredSlug, '+');
 
@@ -2286,6 +2309,33 @@ export class CoursesService implements OnModuleInit {
     const existingIndex = notes.findIndex(
       (item: any) => item?.userId?.toString?.() === userId,
     );
+    const limit = getTierLimit(
+      APP_LIMITS.lessonTimedNotesPerLesson,
+      user?.premiumStatus,
+    );
+    const existingText =
+      existingIndex >= 0 ? String(notes[existingIndex]?.text || '') : '';
+    const existingTimedNotesCount = this.countTimedLessonNotes(existingText);
+    const nextTimedNotesCount = this.countTimedLessonNotes(text);
+    const existingUntimedLinesCount =
+      this.countUntimedLessonNoteLines(existingText);
+    const nextUntimedLinesCount = this.countUntimedLessonNoteLines(text);
+
+    if (
+      nextTimedNotesCount > limit &&
+      nextTimedNotesCount > existingTimedNotesCount
+    ) {
+      throw new BadRequestException(
+        `Bu tarifda bir dars uchun maksimal ${limit} ta eslatma qo'sha olasiz`,
+      );
+    }
+
+    if (nextUntimedLinesCount > existingUntimedLinesCount) {
+      throw new BadRequestException(
+        "Eslatma faqat vaqt bilan qo'shilishi kerak",
+      );
+    }
+
     const updatedAt = new Date();
 
     if (existingIndex >= 0) {
