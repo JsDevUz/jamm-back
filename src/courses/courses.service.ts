@@ -215,6 +215,18 @@ export class CoursesService implements OnModuleInit {
       gradient: String(course?.gradient || '').trim(),
       category: String(course?.category || 'IT').trim() || 'IT',
       lessonLanguage: String(course?.lessonLanguage || '').trim(),
+      previewLearn: Array.isArray(course?.previewLearn)
+        ? course.previewLearn
+            .map((item: any) => String(item || '').trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [],
+      previewRequirements: Array.isArray(course?.previewRequirements)
+        ? course.previewRequirements
+            .map((item: any) => String(item || '').trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [],
       deliveryType:
         String(course?.deliveryType || 'recorded').trim() === 'ongoing'
           ? 'ongoing'
@@ -1632,6 +1644,95 @@ export class CoursesService implements OnModuleInit {
       lessons: [],
     });
     return this.findById(createdCourse._id.toString()) as any;
+  }
+
+  async update(
+    courseId: string,
+    userId: string,
+    dto: {
+      name?: string;
+      description?: string;
+      image?: string;
+      category?: string;
+      lessonLanguage?: string;
+      previewLearn?: string[];
+      previewRequirements?: string[];
+      deliveryType?: 'ongoing' | 'recorded';
+      price?: number;
+      accessType?: string;
+    },
+  ): Promise<CourseDocument> {
+    const course = this.attachCourseRuntimeHelpers(await this.findById(courseId));
+    if (course.createdBy.toString() !== userId) {
+      throw new ForbiddenException("Siz bu kursni tahrirlay olmaysiz");
+    }
+
+    const nextName =
+      dto.name !== undefined ? String(dto.name || '').trim() : String(course.name || '').trim();
+    const nextDescription =
+      dto.description !== undefined
+        ? String(dto.description || '').trim()
+        : String(course.description || '').trim();
+    const nextImage =
+      dto.image !== undefined ? String(dto.image || '').trim() : String(course.image || '').trim();
+    const nextCategory =
+      dto.category !== undefined
+        ? String(dto.category || '').trim()
+        : String(course.category || 'IT').trim();
+    const nextLessonLanguage =
+      dto.lessonLanguage !== undefined
+        ? String(dto.lessonLanguage || '').trim()
+        : String(course.lessonLanguage || '').trim();
+    const nextPreviewLearn =
+      dto.previewLearn !== undefined ? dto.previewLearn : course.previewLearn || [];
+    const nextPreviewRequirements =
+      dto.previewRequirements !== undefined
+        ? dto.previewRequirements
+        : course.previewRequirements || [];
+    const nextDeliveryType =
+      dto.deliveryType !== undefined ? dto.deliveryType : course.deliveryType;
+    const nextAccessType =
+      dto.accessType !== undefined ? dto.accessType : course.accessType || 'free_request';
+    const nextPrice =
+      dto.price !== undefined ? Number(dto.price || 0) : Number(course.price || 0);
+
+    assertMaxChars('Kurs nomi', nextName, APP_TEXT_LIMITS.courseNameChars);
+    assertMaxChars(
+      'Kurs tavsifi',
+      nextDescription,
+      APP_TEXT_LIMITS.courseDescriptionChars,
+    );
+    assertMaxChars('Kurs kategoriyasi', nextCategory, APP_TEXT_LIMITS.courseCategoryChars);
+    assertMaxChars('Dars tili', nextLessonLanguage, 40);
+    for (const item of nextPreviewLearn || []) {
+      assertMaxChars("Kursda o'rganiladigan bo'lim", item, 160);
+    }
+    for (const item of nextPreviewRequirements || []) {
+      assertMaxChars('Kurs talabi', item, 160);
+    }
+
+    course.name = nextName;
+    course.description = nextDescription;
+    course.image = nextImage;
+    course.category = nextCategory || 'IT';
+    course.lessonLanguage = nextLessonLanguage;
+    course.previewLearn = (nextPreviewLearn || [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    course.previewRequirements = (nextPreviewRequirements || [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    course.deliveryType = nextDeliveryType === 'ongoing' ? 'ongoing' : 'recorded';
+    course.accessType =
+      nextAccessType === 'paid' || nextAccessType === 'free_open'
+        ? nextAccessType
+        : 'free_request';
+    course.price = course.accessType === 'paid' ? Math.max(0, nextPrice) : 0;
+
+    await this.persistCourseCollections(course);
+    return this.findById(courseId) as any;
   }
 
   async delete(courseId: string, userId: string): Promise<void> {

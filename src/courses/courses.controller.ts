@@ -49,6 +49,7 @@ import {
 import {
   CreateCourseDto,
   CreateLessonDto,
+  UpdateCourseDto,
   UpdateLessonDto,
 } from './dto/course.dto';
 import { UploadValidationService } from '../common/uploads/upload-validation.service';
@@ -881,6 +882,16 @@ export class CoursesController {
   @Post()
   create(@Request() req, @Body() body: CreateCourseDto) {
     return this.coursesService.create(req.user._id.toString(), body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id')
+  update(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: UpdateCourseDto,
+  ) {
+    return this.coursesService.update(id, req.user._id.toString(), body);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -112,6 +112,59 @@ export class CreateCourseDto {
   accessType?: 'paid' | 'free_request' | 'free_open';
 }
 
+export class UpdateCourseDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(APP_TEXT_LIMITS.courseNameChars)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(APP_TEXT_LIMITS.courseDescriptionChars)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  image?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(APP_TEXT_LIMITS.courseCategoryChars)
+  category?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  lessonLanguage?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @MaxLength(160, { each: true })
+  previewLearn?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @MaxLength(160, { each: true })
+  previewRequirements?: string[];
+
+  @IsOptional()
+  @IsEnum(['ongoing', 'recorded'])
+  deliveryType?: 'ongoing' | 'recorded';
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  price?: number;
+
+  @IsOptional()
+  @IsEnum(['paid', 'free_request', 'free_open'])
+  accessType?: 'paid' | 'free_request' | 'free_open';
+}
+
 export class CreateLessonDto {
   @IsString()
   @MaxLength(APP_TEXT_LIMITS.lessonTitleChars)
