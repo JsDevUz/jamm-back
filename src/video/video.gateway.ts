@@ -1230,6 +1230,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return room;
   }
 
+  private isGuestConnectionRequested(client: Socket): boolean {
+    return (
+      client.handshake?.auth?.guest === true ||
+      client.handshake?.auth?.guest === 'true' ||
+      client.handshake?.query?.guest === '1' ||
+      client.handshake?.query?.guest === 'true'
+    );
+  }
+
   private notifyCreatorOfPendingKnocks(roomId: string, room: RoomInfo) {
     if (!room.creatorSocketId || room.knockQueue.size === 0) {
       return;
@@ -1244,6 +1253,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   async handleConnection(client: Socket) {
+    if (this.isGuestConnectionRequested(client)) {
+      client.data.user = null;
+      console.log(`[Video] connected: ${client.id} (guest-requested)`);
+      return;
+    }
+
     try {
       const payload = await verifySocketToken(
         this.jwtService,
@@ -1263,14 +1278,13 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
     } catch (err) {
       client.data.user = null;
-      console.log(`[Video] auth error for ${client.id}:`, err.message);
-      // Send error to client before disconnect
-      client.emit('auth-error', { message: 'Authentication failed' });
-      // Disconnect after a brief delay to allow error to be sent
-      setTimeout(() => {
-        client.disconnect(true);
-      }, 100);
-      return;
+      console.log(
+        `[Video] auth error for ${client.id}, continuing as guest:`,
+        err.message,
+      );
+      client.emit('auth-error', {
+        message: 'Authentication failed, connected as guest',
+      });
     }
   }
 
