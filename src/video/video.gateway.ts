@@ -244,6 +244,24 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly rateLimiter = new SocketRateLimiter();
   private whiteboardLocks = new Map<string, NodeJS.Timeout>(); // tabId -> timeout
 
+  // Cursor aggregator: batch per-room cursor updates and broadcast at 20fps
+  private cursorBatch = new Map<string, Map<string, WhiteboardCursorPayload>>(); // roomId -> peerId -> payload
+  private cursorFlushTimer: NodeJS.Timeout | null = null;
+  private readonly CURSOR_FLUSH_INTERVAL_MS = 50;
+
+  private ensureCursorFlush() {
+    if (this.cursorFlushTimer) return;
+    this.cursorFlushTimer = setInterval(() => {
+      if (this.cursorBatch.size === 0) return;
+      for (const [roomId, cursors] of this.cursorBatch) {
+        if (cursors.size === 0) continue;
+        const batch = Array.from(cursors.values());
+        this.server.to(roomId).emit('cursors-batch', { cursors: batch });
+        cursors.clear();
+      }
+    }, this.CURSOR_FLUSH_INTERVAL_MS);
+  }
+
   constructor(
     @InjectModel(Chat.name)
     private readonly chatModel: Model<ChatDocument>,
@@ -1065,12 +1083,15 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.clearDisconnectTimer(room, socketId);
     room.peers.delete(socketId);
     room.peerUsers.delete(socketId);
+    // Remove this peer's buffered cursor from the aggregator
+    this.cursorBatch.get(roomId)?.delete(socketId);
     if (room.creatorSocketId === socketId) {
       room.creatorSocketId = '';
       this.resetWhiteboard(roomId, room);
     }
     if (room.peers.size === 0) {
       this.rooms.delete(roomId);
+      this.cursorBatch.delete(roomId);
     }
   }
 
@@ -2171,7 +2192,12 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       updatedAt: Date.now(),
     };
 
-    client.to(roomId).emit('whiteboard-cursor', payload);
+    // Aggregate into batch; flush at 20fps via interval
+    if (!this.cursorBatch.has(roomId)) {
+      this.cursorBatch.set(roomId, new Map());
+    }
+    this.cursorBatch.get(roomId)!.set(client.id, payload);
+    this.ensureCursorFlush();
   }
 
   @SubscribeMessage('whiteboard-cursor-clear')
