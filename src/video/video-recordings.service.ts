@@ -244,18 +244,45 @@ export class VideoRecordingsService {
     input?: { durationMs?: number },
   ) {
     const session = await this.requireOwnedSession(sessionId, userId);
-    if (Number.isFinite(input?.durationMs)) {
-      session.durationMs = Math.max(0, Number(input?.durationMs) || 0);
-      await session.save();
+    if (session.status === 'expired') {
+      throw new BadRequestException('Recording muddati tugagan');
     }
 
-    const finalized = await this.finalizeSession(session._id.toString());
+    if (Number.isFinite(input?.durationMs)) {
+      session.durationMs = Math.max(0, Number(input?.durationMs) || 0);
+    }
 
+    if (session.status !== 'ready') {
+      session.status = 'finalizing';
+      session.lastError = '';
+    }
+    await session.save();
+
+    if (session.status === 'ready' && session.savedMessageId) {
+      return {
+        ok: true,
+        status: session.status,
+        lastError: '',
+        uploadedBytes: session.bytesUploaded || 0,
+      };
+    }
+
+    const taskKey = session._id.toString();
+    void this.finalizeSession(taskKey).catch((error) => {
+      this.logger.error(
+        `Background recording finalization failed ${taskKey}`,
+        error as any,
+      );
+    });
+
+    // Do not keep the HTTP request open while chunks are assembled/converted.
+    // Cloudflare can 524 long requests, but uploaded chunks must remain recoverable.
     return {
-      ok: Boolean(finalized && finalized.status === 'ready'),
-      status: finalized?.status || 'failed',
-      lastError: finalized?.lastError || '',
-      uploadedBytes: finalized?.bytesUploaded || 0,
+      ok: true,
+      status: session.status === 'ready' ? 'ready' : 'finalizing',
+      queued: session.status !== 'ready',
+      lastError: '',
+      uploadedBytes: session.bytesUploaded || 0,
     };
   }
 
@@ -264,8 +291,18 @@ export class VideoRecordingsService {
 
     const staleSessions = await this.recordingModel
       .find({
-        status: { $in: ['recording', 'finalizing'] },
-        lastChunkAt: { $lt: staleBefore },
+        $or: [
+          {
+            status: { $in: ['recording', 'finalizing'] },
+            lastChunkAt: { $lt: staleBefore },
+          },
+          {
+            status: 'failed',
+            finalFileKey: { $in: ['', null] },
+            'segments.0': { $exists: true },
+            updatedAt: { $lt: staleBefore },
+          },
+        ],
       })
       .sort({ lastChunkAt: 1 })
       .limit(10)
