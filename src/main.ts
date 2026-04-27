@@ -3,10 +3,18 @@ import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { getAllowedOrigins } from './common/config/cors.config';
+import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const allowedOrigins = getAllowedOrigins();
+
+  // Wire up Redis-backed Socket.IO adapter so whiteboard/meet broadcasts
+  // fan out across multiple server replicas. Falls back to in-memory if
+  // Redis is unavailable.
+  const redisAdapter = new RedisIoAdapter(app);
+  await redisAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisAdapter);
 
   app.use(
     helmet({
