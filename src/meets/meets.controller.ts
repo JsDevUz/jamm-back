@@ -28,6 +28,8 @@ export class MeetsController {
       title: body.title,
       isPrivate: body.isPrivate,
       creator: req.user._id,
+      courseId: body.courseId,
+      lessonId: body.lessonId,
     });
   }
 

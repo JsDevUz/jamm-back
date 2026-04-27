@@ -22,6 +22,8 @@ import { getAllowedOrigins } from '../common/config/cors.config';
 import { verifySocketToken } from '../common/auth/ws-auth.util';
 import { SocketRateLimiter } from '../common/ws/socket-rate-limiter';
 import { Chat, ChatDocument } from '../chats/schemas/chat.schema';
+import { MeetsService } from '../meets/meets.service';
+import { CoursesService } from '../courses/courses.service';
 
 interface KnockEntry {
   peerKey: string;
@@ -36,6 +38,7 @@ interface WhiteboardPoint {
 
 type WhiteboardTool =
   | 'pen'
+  | 'marker'
   | 'eraser'
   | 'text'
   | 'arrow'
@@ -149,6 +152,13 @@ interface RoomInfo {
   knockQueue: Map<string, KnockEntry>;
   disconnectTimers: Map<string, NodeJS.Timeout>;
   whiteboard: WhiteboardState;
+  // When set, the room is bound to a course lesson — joins/leaves drive
+  // automatic attendance and the teacher gets in-meet attendance/grading
+  // controls. Resolved once on first join via MeetsService.
+  lessonBinding?: { courseId: string; lessonId: string } | null;
+  // Cache: per-userId promise of the in-flight markMeetAttendance call so we
+  // don't double-write on rapid reconnect/socket replace.
+  attendanceMarkInFlight?: Map<string, Promise<unknown>>;
 }
 
 const ROOM_ID_PATTERN = /^[a-zA-Z0-9_-]{4,128}$/;
@@ -268,7 +278,66 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly premiumService: PremiumService,
+    private readonly meetsService: MeetsService,
+    private readonly coursesService: CoursesService,
   ) {}
+
+  /** Resolve lesson binding for a room (cached on RoomInfo). */
+  private async resolveLessonBinding(
+    room: RoomInfo,
+    roomId: string,
+  ): Promise<{ courseId: string; lessonId: string } | null> {
+    if (room.lessonBinding !== undefined) {
+      return room.lessonBinding;
+    }
+    try {
+      const binding = await this.meetsService.getLessonBinding(roomId);
+      room.lessonBinding = binding;
+      return binding;
+    } catch {
+      room.lessonBinding = null;
+      return null;
+    }
+  }
+
+  /** Fire-and-forget attendance mark; deduped per userId per room. */
+  private scheduleAttendanceMark(
+    room: RoomInfo,
+    roomId: string,
+    userId: string,
+    intent: 'join' | 'leave',
+  ) {
+    if (!userId) return;
+    const binding = room.lessonBinding;
+    if (!binding) return;
+    const key = `${intent}:${userId}`;
+    const inFlight = (room.attendanceMarkInFlight ||= new Map());
+    if (inFlight.has(key)) return;
+    const promise = this.coursesService
+      .markMeetAttendance(binding.courseId, binding.lessonId, userId, intent)
+      .then((result) => {
+        if (result?.userId && result?.status) {
+          this.server.to(roomId).emit('meet-attendance-updated', {
+            courseId: binding.courseId,
+            lessonId: binding.lessonId,
+            userId: result.userId,
+            status: result.status,
+          });
+        }
+        return result;
+      })
+      .catch((err: any) => {
+        console.error(
+          `[Video] markMeetAttendance failed (${intent})`,
+          err?.message || err,
+        );
+        return null;
+      })
+      .finally(() => {
+        inFlight.delete(key);
+      });
+    inFlight.set(key, promise);
+  }
 
   private sanitizeDisplayName(rawValue: unknown): string {
     const value =
@@ -326,6 +395,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private sanitizeWhiteboardTool(rawValue: unknown): WhiteboardTool {
+    if (rawValue === 'marker') {
+      return 'marker';
+    }
+
     if (rawValue === 'eraser') {
       return 'eraser';
     }
@@ -1034,7 +1107,11 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  private emitWhiteboardState(target: Socket | string, room: RoomInfo) {
+  private emitWhiteboardState(
+    target: Socket | string,
+    room: RoomInfo,
+    excludeSocketId?: string,
+  ) {
     this.ensureWhiteboardState(room);
     const payload = {
       isActive: room.whiteboard.isActive,
@@ -1049,7 +1126,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
 
     if (typeof target === 'string') {
-      this.server.to(target).emit('whiteboard-state', payload);
+      const channel = excludeSocketId
+        ? this.server.to(target).except(excludeSocketId)
+        : this.server.to(target);
+      channel.emit('whiteboard-state', payload);
       return;
     }
 
@@ -1081,6 +1161,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private removePeerFromRoom(room: RoomInfo, roomId: string, socketId: string) {
     this.clearDisconnectTimer(room, socketId);
+    const departingUserId = room.peerUsers.get(socketId) || '';
     room.peers.delete(socketId);
     room.peerUsers.delete(socketId);
     // Remove this peer's buffered cursor from the aggregator
@@ -1088,6 +1169,14 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (room.creatorSocketId === socketId) {
       room.creatorSocketId = '';
       this.resetWhiteboard(roomId, room);
+    }
+    // Update attendance only when the user has no other socket left in the room.
+    if (
+      departingUserId &&
+      room.lessonBinding &&
+      !Array.from(room.peerUsers.values()).includes(departingUserId)
+    ) {
+      this.scheduleAttendanceMark(room, roomId, departingUserId, 'leave');
     }
     if (room.peers.size === 0) {
       this.rooms.delete(roomId);
@@ -1429,6 +1518,9 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         String(userId),
         client.id,
       );
+      // Re-resolve lesson binding so the in-meet attendance panel can render
+      // for the teacher when they reconnect to an existing room.
+      await this.resolveLessonBinding(existingRoom, roomId);
       this.admitPeer(client, roomId, displayName, existingRoom);
       client.emit('room-created', {
         roomId,
@@ -1479,7 +1571,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         status,
       );
 
-      this.rooms.set(roomId, {
+      const newRoom: RoomInfo = {
         peers: new Map([[client.id, displayName]]),
         peerUsers: new Map([[client.id, String(userId)]]),
         isPrivate,
@@ -1490,10 +1582,19 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         knockQueue: new Map(),
         disconnectTimers: new Map(),
         whiteboard: createDefaultWhiteboardState(),
-      });
+      };
+      this.rooms.set(roomId, newRoom);
 
       client.join(roomId);
       client.emit('room-created', { roomId, isPrivate, title });
+
+      // Resolve lesson binding (lookup Meet by roomId in DB). If this room is
+      // bound to a course lesson, surface that to the teacher so the in-meet
+      // attendance panel renders.
+      await this.resolveLessonBinding(newRoom, roomId);
+      if (newRoom.lessonBinding) {
+        client.emit('meet-lesson-binding', newRoom.lessonBinding);
+      }
       console.log(
         `[Video] created room ${roomId} "${title}" (${isPrivate ? 'private' : 'open'}) by ${displayName}`,
       );
@@ -1524,6 +1625,9 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
     }
+
+    // Resolve once per room — used by admitPeer to auto-mark attendance.
+    await this.resolveLessonBinding(room, roomId);
 
     if (room.peers.has(client.id)) {
       client.emit('room-info', {
@@ -1606,14 +1710,23 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }),
     );
 
+    const userId = this.getSocketUserId(client);
     room.peers.set(client.id, displayName);
-    room.peerUsers.set(client.id, this.getSocketUserId(client));
+    room.peerUsers.set(client.id, userId);
     this.clearDisconnectTimer(room, client.id);
     client.join(roomId);
 
     client.emit('existing-peers', { peers: existingPeers });
     this.emitWhiteboardState(client, room);
     client.to(roomId).emit('peer-joined', { peerId: client.id, displayName });
+
+    // Tell joiners about the lesson binding so the client can show the
+    // attendance/grading panel (no-op for non-lesson rooms).
+    if (room.lessonBinding) {
+      client.emit('meet-lesson-binding', room.lessonBinding);
+    }
+    // Fire-and-forget attendance mark for this user.
+    this.scheduleAttendanceMark(room, roomId, userId, 'join');
   }
 
   private emitRoomInfo(roomId: string, room: RoomInfo) {
@@ -2103,7 +2216,10 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.whiteboard.ownerPeerId = client.id;
     room.whiteboard.ownerUserId = this.getSocketUserId(client);
     room.whiteboard.updatedAt = Date.now();
-    this.emitWhiteboardState(roomId, room);
+    // Sender already has the live scroll position locally — echoing the
+    // server-stored ratio back snaps their viewport to a stale frame and
+    // produces visible drift. Exclude them from the broadcast.
+    this.emitWhiteboardState(roomId, room, client.id);
   }
 
   @SubscribeMessage('whiteboard-board-zoom')
@@ -2161,7 +2277,7 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     room.whiteboard.ownerPeerId = client.id;
     room.whiteboard.ownerUserId = this.getSocketUserId(client);
     room.whiteboard.updatedAt = Date.now();
-    this.emitWhiteboardState(roomId, room);
+    this.emitWhiteboardState(roomId, room, client.id);
   }
 
   @SubscribeMessage('whiteboard-cursor')
@@ -2742,6 +2858,167 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     client.to(roomId).emit('peer-left', { peerId: client.id });
     client.leave(roomId);
+  }
+
+  // ─── Lesson Meet: teacher attendance + grading controls ────────────────────
+
+  @SubscribeMessage('meet-set-attendance')
+  async handleMeetSetAttendance(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { roomId: string; targetUserId: string; status: string },
+  ) {
+    this.rateLimiter.take(`video:meet-set-attendance:${client.id}`, 240, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!room || !room.peers.has(client.id)) {
+      client.emit('error', { message: 'Room not found' });
+      return;
+    }
+    if (room.creatorSocketId !== client.id) {
+      client.emit('error', { message: 'Faqat dars egasi ruxsat etilgan' });
+      return;
+    }
+    const binding = room.lessonBinding;
+    if (!binding) {
+      client.emit('error', { message: "Bu meet darsga bog'lanmagan" });
+      return;
+    }
+    const targetUserId =
+      typeof data?.targetUserId === 'string' ? data.targetUserId.trim() : '';
+    const status = typeof data?.status === 'string' ? data.status.trim() : '';
+    if (!targetUserId || !['present', 'late', 'absent'].includes(status)) {
+      client.emit('error', { message: "Xato so'rov" });
+      return;
+    }
+    const adminId = this.getSocketUserId(client);
+    if (!adminId) {
+      client.emit('error', { message: 'Auth required' });
+      return;
+    }
+    try {
+      const payload = await this.coursesService.setAttendanceStatus(
+        binding.courseId,
+        binding.lessonId,
+        targetUserId,
+        adminId,
+        status,
+      );
+      // Broadcast minimal patch to everyone in the room so the in-meet panel
+      // updates without re-fetching the whole roster. Course-level listeners
+      // still get notifyCourse('lesson_attendance_updated') from the service.
+      this.server.to(roomId).emit('meet-attendance-updated', {
+        courseId: binding.courseId,
+        lessonId: binding.lessonId,
+        userId: targetUserId,
+        status,
+      });
+      client.emit('meet-attendance-roster', payload);
+    } catch (err: any) {
+      client.emit('error', {
+        message: err?.message || "Davomatni yangilab bo'lmadi",
+      });
+    }
+  }
+
+  @SubscribeMessage('meet-set-grade')
+  async handleMeetSetGrade(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      targetUserId: string;
+      score?: number | null;
+      note?: string;
+    },
+  ) {
+    this.rateLimiter.take(`video:meet-set-grade:${client.id}`, 240, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!room || !room.peers.has(client.id)) {
+      client.emit('error', { message: 'Room not found' });
+      return;
+    }
+    if (room.creatorSocketId !== client.id) {
+      client.emit('error', { message: 'Faqat dars egasi ruxsat etilgan' });
+      return;
+    }
+    const binding = room.lessonBinding;
+    if (!binding) {
+      client.emit('error', { message: "Bu meet darsga bog'lanmagan" });
+      return;
+    }
+    const targetUserId =
+      typeof data?.targetUserId === 'string' ? data.targetUserId.trim() : '';
+    if (!targetUserId) {
+      client.emit('error', { message: "Xato so'rov" });
+      return;
+    }
+    const adminId = this.getSocketUserId(client);
+    if (!adminId) {
+      client.emit('error', { message: 'Auth required' });
+      return;
+    }
+    const dto: { score?: number | null; note?: string } = {};
+    if (data?.score !== undefined) dto.score = data.score;
+    if (typeof data?.note === 'string') dto.note = data.note;
+    try {
+      const payload = await this.coursesService.setLessonOralAssessment(
+        binding.courseId,
+        binding.lessonId,
+        targetUserId,
+        adminId,
+        dto,
+      );
+      this.server.to(roomId).emit('meet-grade-updated', {
+        courseId: binding.courseId,
+        lessonId: binding.lessonId,
+        userId: targetUserId,
+        score: dto.score === undefined ? null : dto.score,
+        note: dto.note,
+      });
+      client.emit('meet-grade-roster', payload);
+    } catch (err: any) {
+      client.emit('error', {
+        message: err?.message || "Bahoni yangilab bo'lmadi",
+      });
+    }
+  }
+
+  @SubscribeMessage('meet-request-roster')
+  async handleMeetRequestRoster(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roomId: string },
+  ) {
+    this.rateLimiter.take(`video:meet-roster:${client.id}`, 60, 60_000);
+    const roomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+    const room = this.rooms.get(roomId);
+    if (!room || !room.peers.has(client.id)) return;
+    const binding = room.lessonBinding;
+    if (!binding) return;
+    if (room.creatorSocketId !== client.id) return;
+    const adminId = this.getSocketUserId(client);
+    if (!adminId) return;
+    try {
+      const [attendance, grading] = await Promise.all([
+        this.coursesService.getLessonAttendance(
+          binding.courseId,
+          binding.lessonId,
+          adminId,
+        ),
+        this.coursesService.getLessonGrading(
+          binding.courseId,
+          binding.lessonId,
+          adminId,
+        ),
+      ]);
+      client.emit('meet-attendance-roster', attendance);
+      client.emit('meet-grade-roster', grading);
+    } catch (err: any) {
+      client.emit('error', {
+        message: err?.message || 'Roster olinmadi',
+      });
+    }
   }
 
   // ─── Screen Share Presence ──────────────────────────────────────────────────

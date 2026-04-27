@@ -20,23 +20,54 @@ export class MeetsService {
     title: string;
     isPrivate: boolean;
     creator: string;
+    courseId?: string | null;
+    lessonId?: string | null;
   }): Promise<Meet> {
     assertMaxChars('Meet nomi', data.title, APP_TEXT_LIMITS.meetTitleChars);
 
-    const existingMeet = await this.meetModel.exists({ roomId: data.roomId });
+    const existingMeet = await this.meetModel.findOne({ roomId: data.roomId });
     if (existingMeet) {
+      // Idempotent: same creator re-creating the same room is a no-op.
+      if (existingMeet.creator.toString() === String(data.creator)) {
+        return existingMeet;
+      }
       throw new ConflictException('Bu room ID allaqachon band');
     }
 
-    const currentCount = await this.meetModel.countDocuments({
-      creator: new Types.ObjectId(data.creator),
-    });
-    if (currentCount >= 1) {
-      throw new ForbiddenException('Sizda allaqachon faol meet mavjud');
-    }
+    const creatorObjectId = new Types.ObjectId(data.creator);
+    // A creator can only have one active meet at a time. Whenever they create
+    // a new one, supersede any prior rows — switching lessons or starting a
+    // new chat meet should "just work" without forcing them to manually delete
+    // the previous one.
+    await this.meetModel.deleteMany({ creator: creatorObjectId });
 
-    const meet = new this.meetModel(data);
+    const meet = new this.meetModel({
+      roomId: data.roomId,
+      title: data.title,
+      isPrivate: data.isPrivate,
+      creator: data.creator,
+      courseId: data.courseId ? new Types.ObjectId(data.courseId) : null,
+      lessonId: data.lessonId || null,
+    });
     return meet.save();
+  }
+
+  /** Returns lesson binding for a roomId (used by video gateway for auto-attendance). */
+  async getLessonBinding(
+    roomId: string,
+  ): Promise<{ courseId: string; lessonId: string } | null> {
+    const meet = await this.meetModel
+      .findOne({ roomId })
+      .select('courseId lessonId')
+      .lean()
+      .exec();
+    if (!meet || !meet.courseId || !meet.lessonId) {
+      return null;
+    }
+    return {
+      courseId: meet.courseId.toString(),
+      lessonId: meet.lessonId,
+    };
   }
 
   async findByCreator(userId: string): Promise<any[]> {
@@ -52,6 +83,8 @@ export class MeetsService {
       title: m.title,
       creator: m.creator,
       isPrivate: m.isPrivate,
+      courseId: m.courseId ? m.courseId.toString() : null,
+      lessonId: m.lessonId || null,
       createdAt: m.createdAt,
     }));
   }
@@ -76,6 +109,8 @@ export class MeetsService {
       title: meet.title,
       creator: meet.creator,
       isPrivate: meet.isPrivate,
+      courseId: meet.courseId ? meet.courseId.toString() : null,
+      lessonId: meet.lessonId || null,
       createdAt: meet.createdAt,
     };
   }

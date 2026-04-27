@@ -2736,6 +2736,98 @@ export class CoursesService implements OnModuleInit {
     };
   }
 
+  /**
+   * Auto-mark a user as 'present' for a lesson when they enter the bound meet.
+   * Called from the video gateway on join-room. Only flips status from absent→present;
+   * never overrides an existing manual mark and never demotes a present/late record.
+   * Returns null if the user has no access to the lesson (silently no-op).
+   */
+  async markMeetAttendance(
+    courseId: string,
+    lessonId: string,
+    userId: string,
+    intent: 'join' | 'leave',
+  ): Promise<{ status: string; userId: string } | null> {
+    let course: CourseDocument;
+    try {
+      course = await this.findById(courseId);
+    } catch {
+      return null;
+    }
+    const lessonIndex = course.lessons.findIndex(
+      (lesson: any) =>
+        lesson._id.toString() === lessonId || lesson.urlSlug === lessonId,
+    );
+    if (lessonIndex === -1) return null;
+    if (!this.canAccessLesson(course, userId, lessonIndex)) return null;
+
+    const lesson = course.lessons[lessonIndex] as any;
+    // Course owner doesn't need to be marked — they're the teacher running the meet.
+    if (course.createdBy.toString() === userId) return null;
+
+    let user: any;
+    try {
+      user = await this.userModel.findById(userId).lean();
+    } catch {
+      return null;
+    }
+    if (!user) return null;
+
+    const existingRecord = this.getAttendanceRecord(lesson, userId);
+    const now = new Date();
+
+    if (existingRecord) {
+      // Don't override a manual mark from the teacher.
+      if (existingRecord.source !== 'manual' && intent === 'join') {
+        if (existingRecord.status === 'absent') {
+          existingRecord.status = 'present';
+        }
+        existingRecord.markedAt = now;
+        existingRecord.lastWatchedAt = now;
+        if (!existingRecord.firstWatchedAt) {
+          existingRecord.firstWatchedAt = now;
+        }
+      } else if (existingRecord.source !== 'manual' && intent === 'leave') {
+        existingRecord.lastWatchedAt = now;
+      }
+    } else if (intent === 'join') {
+      lesson.attendance.push({
+        userId: new Types.ObjectId(userId),
+        userName: user.nickname || user.username || 'User',
+        userAvatar:
+          user.avatar ||
+          (user.nickname || user.username || '').substring(0, 2).toUpperCase(),
+        status: 'present',
+        progressPercent: 0,
+        watchCount: 0,
+        lastPositionSeconds: 0,
+        maxPositionSeconds: 0,
+        lessonDurationSeconds: Number(lesson?.durationSeconds || 0),
+        source: 'auto',
+        markedAt: now,
+        firstWatchedAt: now,
+        lastWatchedAt: now,
+      } as any);
+    } else {
+      // leave with no record → nothing to do
+      return null;
+    }
+
+    await course.save();
+    await this.syncCourseMirrorCollections(course.toObject());
+    this.coursesGateway.notifyCourse(courseId, 'lesson_attendance_updated', {
+      courseId,
+      lessonId: lesson._id.toString(),
+      userId,
+    });
+
+    const record = this.getAttendanceRecord(lesson, userId);
+    return {
+      status: record?.status || 'present',
+      userId,
+    };
+  }
+
   async setAttendanceStatus(
     courseId: string,
     lessonId: string,

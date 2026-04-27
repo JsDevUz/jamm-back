@@ -11,6 +11,8 @@ import { getJwtSecret } from '../auth/auth-cookie.util';
 import { Chat, ChatSchema } from '../chats/schemas/chat.schema';
 import { VideoRecording, VideoRecordingSchema } from './schemas/video-recording.schema';
 import { ChatsModule } from '../chats/chats.module';
+import { MeetsModule } from '../meets/meets.module';
+import { CoursesModule } from '../courses/courses.module';
 
 @Module({
   imports: [
@@ -28,6 +30,8 @@ import { ChatsModule } from '../chats/chats.module';
     }),
     PremiumModule,
     ChatsModule,
+    MeetsModule,
+    CoursesModule,
   ],
   controllers: [VideoController],
   providers: [

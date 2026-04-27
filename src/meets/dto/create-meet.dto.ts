@@ -1,4 +1,12 @@
-import { IsBoolean, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsMongoId,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { APP_TEXT_LIMITS } from '../../common/limits/app-limits';
 
 export class CreateMeetDto {
@@ -14,6 +22,15 @@ export class CreateMeetDto {
 
   @IsBoolean()
   isPrivate: boolean;
+
+  @IsOptional()
+  @IsMongoId()
+  courseId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  lessonId?: string;
 }
 
 export class UpdateMeetPrivacyDto {

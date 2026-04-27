@@ -17,6 +17,15 @@ export class Meet {
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   creator: User | Types.ObjectId;
+
+  // Optional binding to a course lesson. When set, the room is treated as the
+  // live session for that lesson — joins/leaves drive automatic attendance and
+  // the teacher gets in-meet attendance/grading controls.
+  @Prop({ type: Types.ObjectId, ref: 'Course', default: null })
+  courseId: Types.ObjectId | null;
+
+  @Prop({ type: String, default: null })
+  lessonId: string | null;
 }
 
 export const MeetSchema = SchemaFactory.createForClass(Meet);
