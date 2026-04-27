@@ -2410,7 +2410,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
             : undefined,
         stroke,
       });
-      this.emitWhiteboardState(roomId, room);
     } finally {
       // Always release the lock
       this.releaseWhiteboardLock(roomId, tab.id);
@@ -2481,7 +2480,6 @@ export class VideoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       strokeId,
       points: acceptedPoints,
     });
-    this.emitWhiteboardState(roomId, room);
   }
 
   @SubscribeMessage('whiteboard-stroke-remove')
